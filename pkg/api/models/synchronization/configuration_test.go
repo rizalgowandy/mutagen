@@ -8,11 +8,13 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/filesystem/behavior"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
 )
 
 const (
 	testYAMLConfiguration = `
 mode: "two-way-resolved"
+hash: sha256
 maxEntryCount: 500
 maxStagingFileSize: "1000 GB"
 probeMode: "assume"
@@ -27,6 +29,7 @@ watch:
   pollingInterval: 5
 
 ignore:
+  syntax: mutagen
   paths:
     - "ignore/this/**"
     - "!ignore/this/that"
@@ -38,6 +41,9 @@ permissions:
   defaultDirectoryMode: 0755
   defaultOwner: "george"
   defaultGroup: "presidents"
+
+compression:
+  algorithm: deflate
 `
 )
 
@@ -54,11 +60,12 @@ var expectedConfiguration = &synchronization.Configuration{
 	SymbolicLinkMode:       core.SymbolicLinkMode_SymbolicLinkModePortable,
 	WatchMode:              synchronization.WatchMode_WatchModeForcePoll,
 	WatchPollingInterval:   5,
+	IgnoreSyntax:           ignore.Syntax_SyntaxMutagen,
 	Ignores: []string{
 		"ignore/this/**",
 		"!ignore/this/that",
 	},
-	IgnoreVCSMode:        core.IgnoreVCSMode_IgnoreVCSModeIgnore,
+	IgnoreVCSMode:        ignore.IgnoreVCSMode_IgnoreVCSModeIgnore,
 	PermissionsMode:      core.PermissionsMode_PermissionsModePortable,
 	DefaultFileMode:      0644,
 	DefaultDirectoryMode: 0755,
@@ -120,6 +127,9 @@ func TestLoadConfiguration(t *testing.T) {
 	}
 	if configuration.WatchPollingInterval != expectedConfiguration.WatchPollingInterval {
 		t.Error("watch polling interval mismatch:", configuration.WatchPollingInterval, "!=", expectedConfiguration.WatchPollingInterval)
+	}
+	if configuration.IgnoreSyntax != expectedConfiguration.IgnoreSyntax {
+		t.Error("ignore syntax mismatch:", configuration.IgnoreSyntax, "!=", expectedConfiguration.IgnoreSyntax)
 	}
 	if len(configuration.Ignores) != len(expectedConfiguration.Ignores) {
 		t.Error("ignore count mismatch:", len(configuration.Ignores), "!=", len(expectedConfiguration.Ignores))

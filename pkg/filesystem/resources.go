@@ -28,10 +28,10 @@ func LibexecPath() (string, error) {
 	} else if metadata.Mode()&os.ModeSymlink != 0 {
 		if target, err := os.Readlink(executablePath); err != nil {
 			return "", fmt.Errorf("unable to read executable symbolic link target: %w", err)
-		} else if resolved, err := filepath.Abs(filepath.Join(filepath.Dir(executablePath), target)); err != nil {
-			return "", fmt.Errorf("unable to resolve executable symbolic link target: %w", err)
+		} else if filepath.IsAbs(target) {
+			executablePath = target
 		} else {
-			executablePath = resolved
+			executablePath = filepath.Clean(filepath.Join(filepath.Dir(executablePath), target))
 		}
 	}
 

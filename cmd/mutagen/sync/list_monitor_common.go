@@ -10,11 +10,12 @@ import (
 
 	"github.com/mutagen-io/mutagen/cmd/mutagen/common"
 
+	"github.com/mutagen-io/mutagen/pkg/platform/terminal"
 	"github.com/mutagen-io/mutagen/pkg/selection"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/rsync"
-	"github.com/mutagen-io/mutagen/pkg/url"
+	urlpkg "github.com/mutagen-io/mutagen/pkg/url"
 )
 
 const (
@@ -82,12 +83,12 @@ func formatEntry(entry *core.Entry) string {
 }
 
 // printEndpoint prints the configuration for a synchronization endpoint.
-func printEndpoint(name string, url *url.URL, configuration *synchronization.Configuration, state *synchronization.EndpointState, version synchronization.Version, mode common.SessionDisplayMode) {
+func printEndpoint(name string, url *urlpkg.URL, configuration *synchronization.Configuration, state *synchronization.EndpointState, version synchronization.Version, mode common.SessionDisplayMode) {
 	// Print the endpoint header.
 	fmt.Printf("%s:\n", name)
 
 	// Print the URL.
-	fmt.Println("\tURL:", url.Format("\n\t\t"))
+	fmt.Println("\tURL:", terminal.NeutralizeControlCharacters(url.Format("\n\t\t")))
 
 	// Print configuration information if desired.
 	if mode == common.SessionDisplayModeListLong || mode == common.SessionDisplayModeMonitorLong {
@@ -157,14 +158,24 @@ func printEndpoint(name string, url *url.URL, configuration *synchronization.Con
 		if configuration.DefaultOwner != "" {
 			defaultOwnerDescription = configuration.DefaultOwner
 		}
-		fmt.Println("\t\tDefault file/directory owner:", defaultOwnerDescription)
+		fmt.Println("\t\tDefault file/directory owner:", terminal.NeutralizeControlCharacters(defaultOwnerDescription))
 
 		// Compute and print the default file/directory group.
 		defaultGroupDescription := "Default"
 		if configuration.DefaultGroup != "" {
 			defaultGroupDescription = configuration.DefaultGroup
 		}
-		fmt.Println("\t\tDefault file/directory group:", defaultGroupDescription)
+		fmt.Println("\t\tDefault file/directory group:", terminal.NeutralizeControlCharacters(defaultGroupDescription))
+
+		// If the endpoint is remote, then compute and print the compression
+		// algorithm.
+		if url.Protocol != urlpkg.Protocol_Local {
+			compressionAlgorithm := configuration.CompressionAlgorithm.Description()
+			if configuration.CompressionAlgorithm.IsDefault() {
+				compressionAlgorithm += fmt.Sprintf(" (%s)", version.DefaultCompressionAlgorithm().Description())
+			}
+			fmt.Println("\t\tCompression:", compressionAlgorithm)
+		}
 	}
 
 	// At this point, there's no other status information that will be displayed
@@ -195,7 +206,10 @@ func printEndpoint(name string, url *url.URL, configuration *synchronization.Con
 		} else if mode == common.SessionDisplayModeListLong {
 			color.Red("\tScan problems:\n")
 			for _, p := range state.ScanProblems {
-				color.Red("\t\t%s: %v\n", formatPath(p.Path), p.Error)
+				color.Red("\t\t%s: %v\n",
+					terminal.NeutralizeControlCharacters(formatPath(p.Path)),
+					terminal.NeutralizeControlCharacters(p.Error),
+				)
 			}
 			if state.ExcludedScanProblems > 0 {
 				color.Red("\t\t...+%d more...\n", state.ExcludedScanProblems)
@@ -212,7 +226,10 @@ func printEndpoint(name string, url *url.URL, configuration *synchronization.Con
 		} else if mode == common.SessionDisplayModeListLong {
 			color.Red("\tTransition problems:\n")
 			for _, p := range state.TransitionProblems {
-				color.Red("\t\t%s: %v\n", formatPath(p.Path), p.Error)
+				color.Red("\t\t%s: %v\n",
+					terminal.NeutralizeControlCharacters(formatPath(p.Path)),
+					terminal.NeutralizeControlCharacters(p.Error),
+				)
 			}
 			if state.ExcludedTransitionProblems > 0 {
 				color.Red("\t\t...+%d more...\n", state.ExcludedTransitionProblems)
@@ -237,9 +254,9 @@ func printConflicts(conflicts []*core.Conflict, excludedConflicts uint64) {
 		for _, a := range c.AlphaChanges {
 			color.Red(
 				"\t(alpha) %s (%s -> %s)\n",
-				formatPath(a.Path),
-				formatEntry(a.Old),
-				formatEntry(a.New),
+				terminal.NeutralizeControlCharacters(formatPath(a.Path)),
+				terminal.NeutralizeControlCharacters(formatEntry(a.Old)),
+				terminal.NeutralizeControlCharacters(formatEntry(a.New)),
 			)
 		}
 
@@ -247,9 +264,9 @@ func printConflicts(conflicts []*core.Conflict, excludedConflicts uint64) {
 		for _, b := range c.BetaChanges {
 			color.Red(
 				"\t(beta)  %s (%s -> %s)\n",
-				formatPath(b.Path),
-				formatEntry(b.Old),
-				formatEntry(b.New),
+				terminal.NeutralizeControlCharacters(formatPath(b.Path)),
+				terminal.NeutralizeControlCharacters(formatEntry(b.Old)),
+				terminal.NeutralizeControlCharacters(formatEntry(b.New)),
 			)
 		}
 
@@ -306,6 +323,14 @@ func printSession(state *synchronization.State, mode common.SessionDisplayMode) 
 		}
 		fmt.Println("\tSynchronization mode:", synchronizationMode)
 
+		// Compute and print the hashing algorithm.
+		hashingAlgorithmDescription := configuration.HashingAlgorithm.Description()
+		if configuration.HashingAlgorithm.IsDefault() {
+			defaultHashingAlgorithm := state.Session.Version.DefaultHashingAlgorithm()
+			hashingAlgorithmDescription += fmt.Sprintf(" (%s)", defaultHashingAlgorithm.Description())
+		}
+		fmt.Println("\tHashing algorithm:", hashingAlgorithmDescription)
+
 		// Compute and print maximum entry count.
 		var maximumEntryCountDescription string
 		if configuration.MaximumEntryCount == 0 {
@@ -343,20 +368,20 @@ func printSession(state *synchronization.State, mode common.SessionDisplayMode) 
 		}
 		fmt.Println("\tSymbolic link mode:", symbolicLinkModeDescription)
 
-		// Compute and print the VCS ignore mode.
-		ignoreVCSModeDescription := configuration.IgnoreVCSMode.Description()
-		if configuration.IgnoreVCSMode.IsDefault() {
-			defaultIgnoreVCSMode := state.Session.Version.DefaultIgnoreVCSMode()
-			ignoreVCSModeDescription += fmt.Sprintf(" (%s)", defaultIgnoreVCSMode.Description())
+		// Compute and print the ignore syntax.
+		ignoreSyntaxDescription := configuration.IgnoreSyntax.Description()
+		if configuration.IgnoreSyntax.IsDefault() {
+			defaultIgnoreSyntax := state.Session.Version.DefaultIgnoreSyntax()
+			ignoreSyntaxDescription += fmt.Sprintf(" (%s)", defaultIgnoreSyntax.Description())
 		}
-		fmt.Println("\tIgnore VCS mode:", ignoreVCSModeDescription)
+		fmt.Println("\tIgnore syntax:", ignoreSyntaxDescription)
 
 		// Print default ignores. Since this field is deprecated, we don't print
 		// it if it's not set.
 		if len(configuration.DefaultIgnores) > 0 {
 			fmt.Println("\tDefault ignores:")
 			for _, p := range configuration.DefaultIgnores {
-				fmt.Printf("\t\t%s\n", p)
+				fmt.Printf("\t\t%s\n", terminal.NeutralizeControlCharacters(p))
 			}
 		}
 
@@ -364,11 +389,19 @@ func printSession(state *synchronization.State, mode common.SessionDisplayMode) 
 		if len(configuration.Ignores) > 0 {
 			fmt.Println("\tIgnores:")
 			for _, p := range configuration.Ignores {
-				fmt.Printf("\t\t%s\n", p)
+				fmt.Printf("\t\t%s\n", terminal.NeutralizeControlCharacters(p))
 			}
 		} else {
 			fmt.Println("\tIgnores: None")
 		}
+
+		// Compute and print the VCS ignore mode.
+		ignoreVCSModeDescription := configuration.IgnoreVCSMode.Description()
+		if configuration.IgnoreVCSMode.IsDefault() {
+			defaultIgnoreVCSMode := state.Session.Version.DefaultIgnoreVCSMode()
+			ignoreVCSModeDescription += fmt.Sprintf(" (%s)", defaultIgnoreVCSMode.Description())
+		}
+		fmt.Println("\tIgnore VCS mode:", ignoreVCSModeDescription)
 
 		// Compute and print permissions mode.
 		permissionsModeDescription := configuration.PermissionsMode.Description()
@@ -421,7 +454,7 @@ func printSession(state *synchronization.State, mode common.SessionDisplayMode) 
 
 	// Print the last error, if any.
 	if state.LastError != "" {
-		color.Red("Last error: %s\n", state.LastError)
+		color.Red("Last error: %s\n", terminal.NeutralizeControlCharacters(state.LastError))
 	}
 
 	// Print the session status .
@@ -459,7 +492,7 @@ func printSession(state *synchronization.State, mode common.SessionDisplayMode) 
 			stagingProgress.ReceivedFiles, stagingProgress.ExpectedFiles,
 			humanize.Bytes(stagingProgress.TotalReceivedSize), totalSizeDenominator,
 			100.0*fractionComplete,
-			stagingProgress.Path,
+			terminal.NeutralizeControlCharacters(stagingProgress.Path),
 			humanize.Bytes(stagingProgress.ReceivedSize), humanize.Bytes(stagingProgress.ExpectedSize),
 		)
 	}

@@ -1,6 +1,4 @@
-//go:build sspl
-
-// Copyright (c) 2022-present Mutagen IO, Inc.
+// Copyright (c) 2022-present Docker, Inc.
 //
 // This program is free software: you can redistribute it and/or modify it under
 // the terms of the Server Side Public License, version 1, as published by
@@ -17,3 +15,8 @@
 
 // Package linux provides Linux-specific version and capability detection.
 package linux
+
+// NOTE: The mutagensspl build tag has been intentionally omitted from this file
+// in order for go fmt to operate on the other files in this directory:
+//
+// https://github.com/golang/go/issues/4007#issuecomment-66069684

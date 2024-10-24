@@ -1,5 +1,5 @@
 # Use an Alpine-based Go builder.
-FROM golang:1.19.2-alpine3.16 AS builder
+FROM golang:1.23.2-alpine3.20 AS builder
 
 # Disable cgo in order to match the behavior of our release binaries (and to
 # avoid the need for gcc on certain architectures).
@@ -15,13 +15,13 @@ COPY ["sspl", "/mutagen/sspl/"]
 WORKDIR /mutagen
 
 # Build the sidecar entry point and agent binaries.
-RUN ["go", "build", "./cmd/mutagen-sidecar"]
-RUN ["go", "build", "./cmd/mutagen-agent"]
-RUN ["go", "build", "-o", "mutagen-agent-enhanced", "-tags", "sspl,fanotify", "./cmd/mutagen-agent"]
+RUN ["go", "build", "-tags", "mutagensidecar", "./cmd/mutagen-sidecar"]
+RUN ["go", "build", "-o", "mutagen-agent-mit", "-tags", "mutagenagent", "./cmd/mutagen-agent"]
+RUN ["go", "build", "-o", "mutagen-agent-sspl", "-tags", "mutagenagent,mutagensspl,mutagenfanotify", "./cmd/mutagen-agent"]
 
 
 # Switch to a vanilla Alpine base for the final image.
-FROM alpine:3.16 AS base
+FROM alpine:3.20 AS base
 
 # Copy the sidecar entry point from the builder.
 COPY --from=builder ["/mutagen/mutagen-sidecar", "/usr/bin/mutagen-sidecar"]
@@ -36,19 +36,19 @@ ENV MUTAGEN_SIDECAR=1
 ENTRYPOINT ["mutagen-sidecar"]
 
 
-# Define the standard sidecar image.
-FROM base as standard
+# Define the MIT sidecar image.
+FROM base AS mit
 
-# Copy the standard agent from the builder and use its installation mechanism to
-# move it to the correct location.
-COPY --from=builder ["/mutagen/mutagen-agent", "/mutagen-agent"]
+# Copy the MIT agent from the builder and use its installation mechanism to move
+# it to the correct location.
+COPY --from=builder ["/mutagen/mutagen-agent-mit", "/mutagen-agent"]
 RUN ["/mutagen-agent", "install"]
 
 
-# Define the enhanced sidecar image.
-FROM base as enhanced
+# Define the SSPL sidecar image.
+FROM base AS sspl
 
-# Copy the enhanced agent from the builder and use its installation mechanism to
+# Copy the SSPL agent from the builder and use its installation mechanism to
 # move it to the correct location.
-COPY --from=builder ["/mutagen/mutagen-agent-enhanced", "/mutagen-agent"]
+COPY --from=builder ["/mutagen/mutagen-agent-sspl", "/mutagen-agent"]
 RUN ["/mutagen-agent", "install"]

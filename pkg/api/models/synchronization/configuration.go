@@ -5,13 +5,18 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/filesystem"
 	"github.com/mutagen-io/mutagen/pkg/filesystem/behavior"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/compression"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 )
 
 // Configuration represents synchronization session configuration.
 type Configuration struct {
 	// Mode specifies the default synchronization mode.
 	Mode core.SynchronizationMode `json:"mode,omitempty" yaml:"mode" mapstructure:"mode"`
+	// Hash specifies the hashing algorithm to use for content.
+	Hash hashing.Algorithm `json:"hash,omitempty" yaml:"hash" mapstructure:"hash"`
 	// MaximumEntryCount specifies the maximum number of filesystem entries
 	// that endpoints will tolerate managing.
 	MaximumEntryCount uint64 `json:"maxEntryCount,omitempty" yaml:"maxEntryCount" mapstructure:"maxEntryCount"`
@@ -27,10 +32,12 @@ type Configuration struct {
 	// Ignore contains parameters related to synchronization ignore
 	// specifications.
 	Ignore struct {
+		// Syntax specifies the ignore syntax and semantics.
+		Syntax ignore.Syntax `json:"syntax,omitempty" yaml:"syntax" mapstructure:"syntax"`
 		// Paths specifies the default list of ignore specifications.
 		Paths []string `json:"paths,omitempty" yaml:"paths" mapstructure:"paths"`
 		// VCS specifies the VCS ignore mode.
-		VCS core.IgnoreVCSMode `json:"vcs,omitempty" yaml:"vcs" mapstructure:"vcs"`
+		VCS ignore.IgnoreVCSMode `json:"vcs,omitempty" yaml:"vcs" mapstructure:"vcs"`
 	} `json:"ignore" yaml:"ignore" mapstructure:"ignore"`
 	// Symlink contains parameters related to symbolic link handling.
 	Symlink struct {
@@ -65,6 +72,11 @@ type Configuration struct {
 		// permission propagation mode.
 		DefaultGroup string `json:"defaultGroup,omitempty" yaml:"defaultGroup" mapstructure:"defaultGroup"`
 	} `json:"permissions" yaml:"permissions" mapstructure:"permissions"`
+	// Compression contains parameters related to compression.
+	Compression struct {
+		// Algorithm specifies the compression algorithm.
+		Algorithm compression.Algorithm `json:"algorithm,omitempty" yaml:"algorithm" mapstructure:"algorithm"`
+	} `json:"compression" yaml:"compression" mapstructure:"compression"`
 }
 
 // loadFromInternal sets a configuration to match an internal
@@ -72,6 +84,7 @@ type Configuration struct {
 func (c *Configuration) loadFromInternal(configuration *synchronization.Configuration) {
 	// Propagate top-level configuration.
 	c.Mode = configuration.SynchronizationMode
+	c.Hash = configuration.HashingAlgorithm
 	c.MaximumEntryCount = configuration.MaximumEntryCount
 	c.MaximumStagingFileSize = types.ByteSize(configuration.MaximumStagingFileSize)
 	c.ProbeMode = configuration.ProbeMode
@@ -79,6 +92,7 @@ func (c *Configuration) loadFromInternal(configuration *synchronization.Configur
 	c.StageMode = configuration.StageMode
 
 	// Propagate ignore configuration.
+	c.Ignore.Syntax = configuration.IgnoreSyntax
 	c.Ignore.Paths = make([]string, 0, len(configuration.DefaultIgnores)+len(configuration.Ignores))
 	c.Ignore.Paths = append(c.Ignore.Paths, configuration.DefaultIgnores...)
 	c.Ignore.Paths = append(c.Ignore.Paths, configuration.Ignores...)
@@ -97,6 +111,9 @@ func (c *Configuration) loadFromInternal(configuration *synchronization.Configur
 	c.Permissions.DefaultDirectoryMode = filesystem.Mode(configuration.DefaultDirectoryMode)
 	c.Permissions.DefaultOwner = configuration.DefaultOwner
 	c.Permissions.DefaultGroup = configuration.DefaultGroup
+
+	// Propagate compression configuration.
+	c.Compression.Algorithm = configuration.CompressionAlgorithm
 }
 
 // ToInternal converts a public configuration representation to an internal
@@ -105,6 +122,7 @@ func (c *Configuration) loadFromInternal(configuration *synchronization.Configur
 func (c *Configuration) ToInternal() *synchronization.Configuration {
 	return &synchronization.Configuration{
 		SynchronizationMode:    c.Mode,
+		HashingAlgorithm:       c.Hash,
 		MaximumEntryCount:      c.MaximumEntryCount,
 		MaximumStagingFileSize: uint64(c.MaximumStagingFileSize),
 		ProbeMode:              c.ProbeMode,
@@ -113,6 +131,7 @@ func (c *Configuration) ToInternal() *synchronization.Configuration {
 		SymbolicLinkMode:       c.Symlink.Mode,
 		WatchMode:              c.Watch.Mode,
 		WatchPollingInterval:   c.Watch.PollingInterval,
+		IgnoreSyntax:           c.Ignore.Syntax,
 		Ignores:                c.Ignore.Paths,
 		IgnoreVCSMode:          c.Ignore.VCS,
 		PermissionsMode:        c.Permissions.Mode,
@@ -120,5 +139,6 @@ func (c *Configuration) ToInternal() *synchronization.Configuration {
 		DefaultDirectoryMode:   uint32(c.Permissions.DefaultDirectoryMode),
 		DefaultOwner:           c.Permissions.DefaultOwner,
 		DefaultGroup:           c.Permissions.DefaultGroup,
+		CompressionAlgorithm:   c.Compression.Algorithm,
 	}
 }

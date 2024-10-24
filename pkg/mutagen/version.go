@@ -1,4 +1,4 @@
-//go:build go1.19
+//go:build go1.22
 
 package mutagen
 
@@ -13,7 +13,7 @@ const (
 	// VersionMajor represents the current major version of Mutagen.
 	VersionMajor = 0
 	// VersionMinor represents the current minor version of Mutagen.
-	VersionMinor = 16
+	VersionMinor = 18
 	// VersionPatch represents the current patch version of Mutagen.
 	VersionPatch = 0
 	// VersionTag represents a tag to be appended to the Mutagen version string.

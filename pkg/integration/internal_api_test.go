@@ -20,6 +20,8 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/prompting"
 	"github.com/mutagen-io/mutagen/pkg/selection"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/compression"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 	"github.com/mutagen-io/mutagen/pkg/url"
 )
 
@@ -138,7 +140,7 @@ func TestSynchronizationBothRootsNil(t *testing.T) {
 
 	// Test the session lifecycle.
 	if err := testSessionLifecycle(context.Background(), "", alphaURL, betaURL, configuration, false, false, false); err != nil {
-		t.Fatal("session lifecycle test failed:", err)
+		t.Error("session lifecycle test failed:", err)
 	}
 }
 
@@ -173,7 +175,7 @@ func TestSynchronizationGOROOTSrcToBeta(t *testing.T) {
 
 	// Test the session lifecycle.
 	if err := testSessionLifecycle(context.Background(), "", alphaURL, betaURL, configuration, false, false, false); err != nil {
-		t.Fatal("session lifecycle test failed:", err)
+		t.Error("session lifecycle test failed:", err)
 	}
 }
 
@@ -208,11 +210,32 @@ func TestSynchronizationGOROOTSrcToAlpha(t *testing.T) {
 
 	// Test the session lifecycle.
 	if err := testSessionLifecycle(context.Background(), "", alphaURL, betaURL, configuration, false, false, false); err != nil {
-		t.Fatal("session lifecycle test failed:", err)
+		t.Error("session lifecycle test failed:", err)
 	}
 }
 
 func TestSynchronizationGOROOTSrcToBetaInMemory(t *testing.T) {
+	// Define configuration variations.
+	testCases := []*synchronization.Configuration{
+		{},
+		{
+			CompressionAlgorithm: compression.Algorithm_AlgorithmNone,
+		},
+		{
+			HashingAlgorithm: hashing.Algorithm_AlgorithmSHA256,
+		},
+	}
+	if hashing.Algorithm_AlgorithmXXH128.SupportStatus() == hashing.AlgorithmSupportStatusSupported {
+		testCases = append(testCases, &synchronization.Configuration{
+			HashingAlgorithm: hashing.Algorithm_AlgorithmXXH128,
+		})
+	}
+	if compression.Algorithm_AlgorithmZstandard.SupportStatus() == compression.AlgorithmSupportStatusSupported {
+		testCases = append(testCases, &synchronization.Configuration{
+			CompressionAlgorithm: compression.Algorithm_AlgorithmZstandard,
+		})
+	}
+
 	// Check the end-to-end test mode and compute the source synchronization
 	// root accordingly. If no mode has been specified, then skip the test.
 	endToEndTestMode := os.Getenv("MUTAGEN_TEST_END_TO_END")
@@ -230,24 +253,24 @@ func TestSynchronizationGOROOTSrcToBetaInMemory(t *testing.T) {
 	// Allow the test to run in parallel.
 	t.Parallel()
 
-	// Calculate alpha and beta paths.
-	alphaRoot := sourceRoot
-	betaRoot := filepath.Join(t.TempDir(), "beta")
+	// Loop over configurations and test the session lifecycle.
+	for _, configuration := range testCases {
+		// Calculate alpha and beta paths.
+		alphaRoot := sourceRoot
+		betaRoot := filepath.Join(t.TempDir(), "beta")
 
-	// Compute alpha and beta URLs. We use a special protocol with a custom
-	// handler to indicate an in-memory connection.
-	alphaURL := &url.URL{Path: alphaRoot}
-	betaURL := &url.URL{
-		Protocol: netpipe.Protocol_Netpipe,
-		Path:     betaRoot,
-	}
+		// Compute alpha and beta URLs. We use a special protocol with a custom
+		// handler to indicate an in-memory connection.
+		alphaURL := &url.URL{Path: alphaRoot}
+		betaURL := &url.URL{
+			Protocol: netpipe.Protocol_Netpipe,
+			Path:     betaRoot,
+		}
 
-	// Compute configuration. We use defaults for everything.
-	configuration := &synchronization.Configuration{}
-
-	// Test the session lifecycle.
-	if err := testSessionLifecycle(context.Background(), "", alphaURL, betaURL, configuration, false, false, false); err != nil {
-		t.Fatal("session lifecycle test failed:", err)
+		// Test the session lifecycle.
+		if err := testSessionLifecycle(context.Background(), "", alphaURL, betaURL, configuration, false, false, false); err != nil {
+			t.Error("session lifecycle test failed:", err)
+		}
 	}
 }
 
@@ -291,7 +314,7 @@ func TestSynchronizationGOROOTSrcToBetaOverSSH(t *testing.T) {
 
 	// Test the session lifecycle.
 	if err := testSessionLifecycle(context.Background(), "", alphaURL, betaURL, configuration, false, false, false); err != nil {
-		t.Fatal("session lifecycle test failed:", err)
+		t.Error("session lifecycle test failed:", err)
 	}
 }
 
@@ -388,7 +411,7 @@ func TestSynchronizationGOROOTSrcToBetaOverDocker(t *testing.T) {
 
 	// Test the session lifecycle.
 	if err := testSessionLifecycle(context.Background(), prompter, alphaURL, betaURL, configuration, false, false, false); err != nil {
-		t.Fatal("session lifecycle test failed:", err)
+		t.Error("session lifecycle test failed:", err)
 	}
 }
 

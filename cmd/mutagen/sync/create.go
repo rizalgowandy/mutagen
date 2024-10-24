@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"google.golang.org/grpc"
 
@@ -24,7 +25,10 @@ import (
 	promptingsvc "github.com/mutagen-io/mutagen/pkg/service/prompting"
 	synchronizationsvc "github.com/mutagen-io/mutagen/pkg/service/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/compression"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 	"github.com/mutagen-io/mutagen/pkg/url"
 )
 
@@ -154,11 +158,11 @@ func createMain(_ *cobra.Command, arguments []string) error {
 		}
 	}
 
-	// If a configuration file has been specified, then load it and merge it
-	// into our cumulative configuration.
-	if createConfiguration.configurationFile != "" {
-		if c, err := loadAndValidateGlobalSynchronizationConfiguration(createConfiguration.configurationFile); err != nil {
-			return fmt.Errorf("unable to load configuration file: %w", err)
+	// If additional default configuration files have been specified, then load
+	// them and merge them into the cumulative configuration.
+	for _, configurationFile := range createConfiguration.configurationFiles {
+		if c, err := loadAndValidateGlobalSynchronizationConfiguration(configurationFile); err != nil {
+			return fmt.Errorf("unable to load configuration file (%s): %w", configurationFile, err)
 		} else {
 			configuration = synchronization.MergeConfigurations(configuration, c)
 		}
@@ -169,6 +173,14 @@ func createMain(_ *cobra.Command, arguments []string) error {
 	if createConfiguration.synchronizationMode != "" {
 		if err := synchronizationMode.UnmarshalText([]byte(createConfiguration.synchronizationMode)); err != nil {
 			return fmt.Errorf("unable to parse synchronization mode: %w", err)
+		}
+	}
+
+	// Validate and convert the hashing algorithm specification.
+	var hashingAlgorithm hashing.Algorithm
+	if createConfiguration.hash != "" {
+		if err := hashingAlgorithm.UnmarshalText([]byte(createConfiguration.hash)); err != nil {
+			return fmt.Errorf("unable to parse hashing algorithm: %w", err)
 		}
 	}
 
@@ -268,21 +280,29 @@ func createMain(_ *cobra.Command, arguments []string) error {
 	// There's no need to validate the watch polling intervals - any uint32
 	// values are valid.
 
-	// Validate ignore specifications.
-	for _, ignore := range createConfiguration.ignores {
-		if !core.ValidIgnorePattern(ignore) {
-			return fmt.Errorf("invalid ignore pattern: %s", ignore)
+	// Validate and convert the ignore syntax specification.
+	var ignoreSyntax ignore.Syntax
+	if createConfiguration.ignoreSyntax != "" {
+		if err := ignoreSyntax.UnmarshalText([]byte(createConfiguration.ignoreSyntax)); err != nil {
+			return fmt.Errorf("unable to parse ignore syntax: %w", err)
 		}
 	}
 
+	// Unfortunately we can't validate ignore specifications in any meaningful
+	// way because we don't yet know the ignore syntax being used. This could be
+	// specified by the global YAML configuration or (more likely) determined by
+	// the default session version within the daemon. These ignores will
+	// eventually be validated at endpoint initialization time, but there's no
+	// convenient way to do it earlier in the session creation process.
+
 	// Validate and convert the VCS ignore mode specification.
-	var ignoreVCSMode core.IgnoreVCSMode
+	var ignoreVCSMode ignore.IgnoreVCSMode
 	if createConfiguration.ignoreVCS && createConfiguration.noIgnoreVCS {
 		return errors.New("conflicting VCS ignore behavior specified")
 	} else if createConfiguration.ignoreVCS {
-		ignoreVCSMode = core.IgnoreVCSMode_IgnoreVCSModeIgnore
+		ignoreVCSMode = ignore.IgnoreVCSMode_IgnoreVCSModeIgnore
 	} else if createConfiguration.noIgnoreVCS {
-		ignoreVCSMode = core.IgnoreVCSMode_IgnoreVCSModePropagate
+		ignoreVCSMode = ignore.IgnoreVCSMode_IgnoreVCSModePropagate
 	}
 
 	// Validate and convert the permissions mode specification.
@@ -400,10 +420,29 @@ func createMain(_ *cobra.Command, arguments []string) error {
 		}
 	}
 
+	// Validate and convert compression algorithm specifications.
+	var compressionAlgorithm, compressionAlgorithmAlpha, compressionAlgorithmBeta compression.Algorithm
+	if createConfiguration.compression != "" {
+		if err := compressionAlgorithm.UnmarshalText([]byte(createConfiguration.compression)); err != nil {
+			return fmt.Errorf("unable to parse compression algorithm: %w", err)
+		}
+	}
+	if createConfiguration.compressionAlpha != "" {
+		if err := compressionAlgorithmAlpha.UnmarshalText([]byte(createConfiguration.compressionAlpha)); err != nil {
+			return fmt.Errorf("unable to parse compression algorithm for alpha: %w", err)
+		}
+	}
+	if createConfiguration.compressionBeta != "" {
+		if err := compressionAlgorithmBeta.UnmarshalText([]byte(createConfiguration.compressionBeta)); err != nil {
+			return fmt.Errorf("unable to parse compression algorithm for beta: %w", err)
+		}
+	}
+
 	// Create the command line configuration and merge it into our cumulative
 	// configuration.
 	configuration = synchronization.MergeConfigurations(configuration, &synchronization.Configuration{
 		SynchronizationMode:    synchronizationMode,
+		HashingAlgorithm:       hashingAlgorithm,
 		MaximumEntryCount:      createConfiguration.maximumEntryCount,
 		MaximumStagingFileSize: maximumStagingFileSize,
 		ProbeMode:              probeMode,
@@ -412,6 +451,7 @@ func createMain(_ *cobra.Command, arguments []string) error {
 		SymbolicLinkMode:       symbolicLinkMode,
 		WatchMode:              watchMode,
 		WatchPollingInterval:   createConfiguration.watchPollingInterval,
+		IgnoreSyntax:           ignoreSyntax,
 		Ignores:                createConfiguration.ignores,
 		IgnoreVCSMode:          ignoreVCSMode,
 		PermissionsMode:        permissionsMode,
@@ -419,6 +459,7 @@ func createMain(_ *cobra.Command, arguments []string) error {
 		DefaultDirectoryMode:   uint32(defaultDirectoryMode),
 		DefaultOwner:           createConfiguration.defaultOwner,
 		DefaultGroup:           createConfiguration.defaultGroup,
+		CompressionAlgorithm:   compressionAlgorithm,
 	})
 
 	// Create the creation specification.
@@ -436,6 +477,7 @@ func createMain(_ *cobra.Command, arguments []string) error {
 			DefaultDirectoryMode: uint32(defaultDirectoryModeAlpha),
 			DefaultOwner:         createConfiguration.defaultOwnerAlpha,
 			DefaultGroup:         createConfiguration.defaultGroupAlpha,
+			CompressionAlgorithm: compressionAlgorithmAlpha,
 		},
 		ConfigurationBeta: &synchronization.Configuration{
 			ProbeMode:            probeModeBeta,
@@ -447,6 +489,7 @@ func createMain(_ *cobra.Command, arguments []string) error {
 			DefaultDirectoryMode: uint32(defaultDirectoryModeBeta),
 			DefaultOwner:         createConfiguration.defaultOwnerBeta,
 			DefaultGroup:         createConfiguration.defaultGroupBeta,
+			CompressionAlgorithm: compressionAlgorithmBeta,
 		},
 		Name:   createConfiguration.name,
 		Labels: labels,
@@ -495,11 +538,13 @@ var createConfiguration struct {
 	// noGlobalConfiguration specifies whether or not the global configuration
 	// file should be ignored.
 	noGlobalConfiguration bool
-	// configurationFile specifies a file from which to load configuration. It
-	// should be a path relative to the working directory.
-	configurationFile string
+	// configurationFiles stores paths of additional files from which to load
+	// default configuration.
+	configurationFiles []string
 	// synchronizationMode specifies the synchronization mode for the session.
 	synchronizationMode string
+	// hash specifies the hashing algorithm to use for the session.
+	hash string
 	// maximumEntryCount specifies the maximum number of filesystem entries that
 	// endpoints will tolerate managing.
 	maximumEntryCount uint64
@@ -552,6 +597,8 @@ var createConfiguration struct {
 	// poll-based or hybrid watching, taking priority over watchPollingInterval
 	// on beta if specified.
 	watchPollingIntervalBeta uint32
+	// ignoreSyntax specifies the ignore syntax and semantics for the session.
+	ignoreSyntax string
 	// ignores is the list of ignore specifications for the session.
 	ignores []string
 	// ignoreVCS specifies whether or not to enable VCS ignores for the session.
@@ -559,7 +606,7 @@ var createConfiguration struct {
 	// noIgnoreVCS specifies whether or not to disable VCS ignores for the
 	// session.
 	noIgnoreVCS bool
-	// permissionsMode specifies the permissions mdoe to use for the session.
+	// permissionsMode specifies the permissions mode to use for the session.
 	permissionsMode string
 	// defaultFileMode specifies the default permission mode to use for new
 	// files in "portable" permission propagation mode, with endpoint-specific
@@ -613,6 +660,15 @@ var createConfiguration struct {
 	// permission propagation mode, taking priority over defaultGroup on beta if
 	// specified.
 	defaultGroupBeta string
+	// compression specifies the compression algorithm to use when communicating
+	// with remote endpoints.
+	compression string
+	// compressionAlpha specifies the compression algorithm to use when
+	// communicating with a remote alpha endpoint.
+	compressionAlpha string
+	// compressionBeta specifies the compression algorithm to use when
+	// communicating with a remote beta endpoint.
+	compressionBeta string
 }
 
 func init() {
@@ -635,10 +691,11 @@ func init() {
 
 	// Wire up general configuration flags.
 	flags.BoolVar(&createConfiguration.noGlobalConfiguration, "no-global-configuration", false, "Ignore the global configuration file")
-	flags.StringVarP(&createConfiguration.configurationFile, "configuration-file", "c", "", "Specify a file from which to load additional default configuration")
+	flags.StringSliceVarP(&createConfiguration.configurationFiles, "configuration-file", "c", nil, "Specify additional files from which to load (and merge) default configuration parameters")
 
 	// Wire up synchronization flags.
-	flags.StringVarP(&createConfiguration.synchronizationMode, "sync-mode", "m", "", "Specify synchronization mode (two-way-safe|two-way-resolved|one-way-safe|one-way-replica)")
+	flags.StringVarP(&createConfiguration.synchronizationMode, "mode", "m", "", "Specify synchronization mode (two-way-safe|two-way-resolved|one-way-safe|one-way-replica)")
+	flags.StringVarP(&createConfiguration.hash, "hash", "H", "", "Specify content hashing algorithm ("+hashFlagOptions+")")
 	flags.Uint64Var(&createConfiguration.maximumEntryCount, "max-entry-count", 0, "Specify the maximum number of entries that endpoints will manage")
 	flags.StringVar(&createConfiguration.maximumStagingFileSize, "max-staging-file-size", "", "Specify the maximum (individual) file size that endpoints will stage")
 	flags.StringVar(&createConfiguration.probeMode, "probe-mode", "", "Specify probe mode (probe|assume)")
@@ -663,6 +720,7 @@ func init() {
 	flags.Uint32Var(&createConfiguration.watchPollingIntervalBeta, "watch-polling-interval-beta", 0, "Specify watch polling interval in seconds for beta")
 
 	// Wire up ignore flags.
+	flags.StringVar(&createConfiguration.ignoreSyntax, "ignore-syntax", "", "Specify ignore syntax (mutagen|docker)")
 	flags.StringSliceVarP(&createConfiguration.ignores, "ignore", "i", nil, "Specify ignore paths")
 	flags.BoolVar(&createConfiguration.ignoreVCS, "ignore-vcs", false, "Ignore VCS directories")
 	flags.BoolVar(&createConfiguration.noIgnoreVCS, "no-ignore-vcs", false, "Propagate VCS directories")
@@ -681,4 +739,17 @@ func init() {
 	flags.StringVar(&createConfiguration.defaultGroup, "default-group", "", "Specify default file/directory group")
 	flags.StringVar(&createConfiguration.defaultGroupAlpha, "default-group-alpha", "", "Specify default file/directory group for alpha")
 	flags.StringVar(&createConfiguration.defaultGroupBeta, "default-group-beta", "", "Specify default file/directory group for beta")
+
+	// Wire up compression flags.
+	flags.StringVarP(&createConfiguration.compression, "compression", "C", "", "Specify compression algorithm ("+compressionFlagOptions+")")
+	flags.StringVar(&createConfiguration.compressionAlpha, "compression-alpha", "", "Specify compression algorithm for alpha ("+compressionFlagOptions+")")
+	flags.StringVar(&createConfiguration.compressionBeta, "compression-beta", "", "Specify compression algorithm for beta ("+compressionFlagOptions+")")
+
+	// Set up flag normalization. This is only required to handle aliases.
+	flags.SetNormalizeFunc(func(f *pflag.FlagSet, name string) pflag.NormalizedName {
+		if name == "sync-mode" {
+			name = "mode"
+		}
+		return pflag.NormalizedName(name)
+	})
 }

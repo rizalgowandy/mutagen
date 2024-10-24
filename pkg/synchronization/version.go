@@ -1,13 +1,14 @@
 package synchronization
 
 import (
-	"crypto/sha1"
-	"hash"
 	"math"
 
 	"github.com/mutagen-io/mutagen/pkg/filesystem"
 	"github.com/mutagen-io/mutagen/pkg/filesystem/behavior"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/compression"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 )
 
 // DefaultVersion is the default session version.
@@ -23,22 +24,23 @@ func (v Version) Supported() bool {
 	}
 }
 
-// Hasher creates an appropriate hash function for the session version.
-func (v Version) Hasher() hash.Hash {
-	switch v {
-	case Version_Version1:
-		return sha1.New()
-	default:
-		panic("unknown or unsupported session version")
-	}
-}
-
 // DefaultSynchronizationMode returns the default synchronization mode for the
 // session version.
 func (v Version) DefaultSynchronizationMode() core.SynchronizationMode {
 	switch v {
 	case Version_Version1:
 		return core.SynchronizationMode_SynchronizationModeTwoWaySafe
+	default:
+		panic("unknown or unsupported session version")
+	}
+}
+
+// DefaultHashingAlgorithm returns the default hashing algorithm for the session
+// version.
+func (v Version) DefaultHashingAlgorithm() hashing.Algorithm {
+	switch v {
+	case Version_Version1:
+		return hashing.Algorithm_AlgorithmSHA1
 	default:
 		panic("unknown or unsupported session version")
 	}
@@ -128,12 +130,23 @@ func (v Version) DefaultWatchPollingInterval() uint32 {
 	}
 }
 
-// DefaultIgnoreVCSMode returns the default VCS ignore mode for the session
+// DefaultIgnoreSyntax returns the default ignore syntax for the session
 // version.
-func (v Version) DefaultIgnoreVCSMode() core.IgnoreVCSMode {
+func (v Version) DefaultIgnoreSyntax() ignore.Syntax {
 	switch v {
 	case Version_Version1:
-		return core.IgnoreVCSMode_IgnoreVCSModePropagate
+		return ignore.Syntax_SyntaxMutagen
+	default:
+		panic("unknown or unsupported session version")
+	}
+}
+
+// DefaultIgnoreVCSMode returns the default VCS ignore mode for the session
+// version.
+func (v Version) DefaultIgnoreVCSMode() ignore.IgnoreVCSMode {
+	switch v {
+	case Version_Version1:
+		return ignore.IgnoreVCSMode_IgnoreVCSModePropagate
 	default:
 		panic("unknown or unsupported session version")
 	}
@@ -147,19 +160,16 @@ func (v Version) DefaultPermissionsMode() core.PermissionsMode {
 	// keep the default here the same for all session versions. If we want this
 	// behavior to differ in the future, then we'd need to thread the session
 	// version information into Configuration.EnsureValid, because the default
-	// can affect the validation of default file and directory modes. It's kind
-	// of an ugly (and somewhat unique) situation, motivated by the fact that
-	// this particular configuration parameter affects the validation of other
-	// configuration parameters. In the future, this hack could be replaced by
-	// looser validation on the default file and directory modes, at least in
-	// the scenario where a default permissions mode is used (which is most
-	// cases, unfortunately), but since we don't have any foreseeable reason to
-	// change this default across future session versions, we're best off
-	// keeping the stricter validation for now. We could also change the
-	// signature of Configuration.EnsureValid to accept a session version, but
-	// that rapidly spirals into other APIs and it's not even clear how to
-	// enforce that the daemon's default session version is what's being used
-	// for validation in the command line interface or external tools.
+	// can affect the validation of default file and directory modes. This hack
+	// could be replaced by looser validation on the default file and directory
+	// modes, at least in the scenario where a default permissions mode is used
+	// (which is most cases, unfortunately), but since we don't have any
+	// foreseeable reason to change this default across future session versions,
+	// we're best off keeping the stricter validation for now. We could also
+	// change the signature of Configuration.EnsureValid to accept a session
+	// version, but that rapidly spirals into other APIs and it's not even clear
+	// how to enforce that the daemon's default session version is what's being
+	// used for validation in the command line interface or external tools.
 	switch v {
 	case Version_Version1:
 		return core.PermissionsMode_PermissionsModePortable
@@ -210,6 +220,17 @@ func (v Version) DefaultGroupSpecification() string {
 	switch v {
 	case Version_Version1:
 		return ""
+	default:
+		panic("unknown or unsupported session version")
+	}
+}
+
+// DefaultCompressionAlgorithm returns the default compression algorithm for the
+// session version.
+func (v Version) DefaultCompressionAlgorithm() compression.Algorithm {
+	switch v {
+	case Version_Version1:
+		return compression.Algorithm_AlgorithmDeflate
 	default:
 		panic("unknown or unsupported session version")
 	}

@@ -10,7 +10,8 @@ import (
 
 	"github.com/mutagen-io/mutagen/pkg/agent"
 	"github.com/mutagen-io/mutagen/pkg/filesystem"
-	"github.com/mutagen-io/mutagen/pkg/process"
+	"github.com/mutagen-io/mutagen/pkg/platform"
+	"github.com/mutagen-io/mutagen/pkg/sidecar"
 )
 
 const (
@@ -25,8 +26,14 @@ const (
 
 // Housekeep invokes housekeeping functions on the Mutagen data directory.
 func Housekeep() {
-	// Perform housekeeping on agent binaries.
-	housekeepAgents()
+	// Perform housekeeping on agent binaries, but only if we're not in a
+	// Mutagen sidecar container. Sidecar containers are particularly
+	// susceptible to stale agent access times due to the fact that the agent is
+	// baked into the sidecar image and the sidecar image is typically unpacked
+	// via OverlayFS on top of ext4 with either relatime or noatime.
+	if !sidecar.EnvironmentIsSidecar() {
+		housekeepAgents()
+	}
 
 	// Perform housekeeping on caches.
 	housekeepCaches()
@@ -53,7 +60,7 @@ func housekeepAgents() {
 	}
 
 	// Compute the name of the agent binary.
-	agentName := process.ExecutableName(agent.BaseName, runtime.GOOS)
+	agentName := platform.ExecutableName(agent.BaseName, runtime.GOOS)
 
 	// Grab the current time.
 	now := time.Now()

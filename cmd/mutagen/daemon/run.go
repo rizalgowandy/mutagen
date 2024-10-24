@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 
@@ -21,13 +23,6 @@ import (
 	promptingsvc "github.com/mutagen-io/mutagen/pkg/service/prompting"
 	synchronizationsvc "github.com/mutagen-io/mutagen/pkg/service/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
-
-	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/docker"
-	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/local"
-	_ "github.com/mutagen-io/mutagen/pkg/forwarding/protocols/ssh"
-	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/docker"
-	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/local"
-	_ "github.com/mutagen-io/mutagen/pkg/synchronization/protocols/ssh"
 )
 
 // runMain is the entry point for the run command.
@@ -103,7 +98,9 @@ func runMain(_ *cobra.Command, _ []string) error {
 	// Create the daemon listener and defer its closure. Since we hold the
 	// daemon lock, we preemptively remove any existing socket since it should
 	// be stale.
-	os.Remove(endpoint)
+	if err := os.Remove(endpoint); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("unable to remove existing daemon endpoint: %w", err)
+	}
 	listener, err := ipc.NewListener(endpoint)
 	if err != nil {
 		return fmt.Errorf("unable to create daemon listener: %w", err)

@@ -8,7 +8,6 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mutagen-io/mutagen/pkg/encoding"
@@ -20,7 +19,13 @@ import (
 	"github.com/mutagen-io/mutagen/pkg/state"
 	"github.com/mutagen-io/mutagen/pkg/synchronization"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/core/fastpath"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore"
+	dockerignore "github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore/docker"
+	mutagenignore "github.com/mutagen-io/mutagen/pkg/synchronization/core/ignore/mutagen"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/endpoint/local/staging"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/rsync"
+	"github.com/mutagen-io/mutagen/pkg/timeutil"
 )
 
 const (
@@ -77,9 +82,6 @@ type endpoint struct {
 	// symbolicLinkMode is the symbolic link mode. This field is static and thus
 	// safe for concurrent reads.
 	symbolicLinkMode core.SymbolicLinkMode
-	// ignores are the path ignore specifications. This field is static and thus
-	// safe for concurrent reads.
-	ignores []string
 	// permissionsMode is the permissions mode. This field is static and thus
 	// safe for concurrent reads.
 	permissionsMode core.PermissionsMode
@@ -126,15 +128,25 @@ type endpoint struct {
 	// safe for concurrent send operations.
 	recursiveWatchRetryEstablish chan struct{}
 	// scanLock serializes access to accelerate, recheckPaths, snapshot, hasher,
-	// cache, ignoreCache, cacheWriteError, and lastScanEntryCount. This lock is
-	// not necessitated by the Endpoint interface (which doesn't permit
+	// cache, ignorer, ignoreCache, cacheWriteError, and lastScanEntryCount.
+	// This lock is not required by the Endpoint interface (which doesn't permit
 	// concurrent usage), but rather the endpoint's background worker Goroutines
-	// for cache saving and filesystem watching. This lock also notably excludes
+	// for cache saving and filesystem watching. This lock notably excludes
 	// coverage of scannedSinceLastStageCall, scannedSinceLastTransitionCall,
 	// lastReturnedScanCache, lastReturnedScanSnapshotDecomposesUnicode, which
 	// are only updated by Scan and read by Stage and Transition, thus making
 	// them safe under Endpoint's (non-concurrent) interface.
-	scanLock sync.Mutex
+	//
+	// Instead of being implemented as a mutex, this lock is implemented as a
+	// semaphore, allowing for preemption when waiting on its acquisition. This
+	// can be useful (for example) in Scan calls that might be blocked waiting
+	// for an initial accelerated watching scan to complete.
+	//
+	// Concretely, this lock is implemented as a channel with a single element
+	// that must be held for the holder to be considered in control of the lock.
+	// The lockScanLock and unlockScanLock methods should be used to manage
+	// control of the lock.
+	scanLock chan struct{}
 	// accelerate indicates that the Scan function should attempt to accelerate
 	// scanning by using data from a background watcher Goroutine.
 	accelerate bool
@@ -148,9 +160,11 @@ type endpoint struct {
 	hasher hash.Hash
 	// cache is the cache from the last successful scan on the endpoint.
 	cache *core.Cache
+	// ignorer is the ignorer to use for scans.
+	ignorer ignore.Ignorer
 	// ignoreCache is the ignore cache from the last successful scan on the
 	// endpoint.
-	ignoreCache core.IgnoreCache
+	ignoreCache ignore.IgnoreCache
 	// cacheWriteError is the last error encountered when trying to write the
 	// cache to disk, if any.
 	cacheWriteError error
@@ -176,7 +190,7 @@ type endpoint struct {
 	// but since Endpoint doesn't allow concurrent usage, we know that the
 	// stager will only be used in at most one of Stage or Transition methods at
 	// any given time.
-	stager *stager
+	stager stager
 }
 
 // NewEndpoint creates a new local endpoint instance using the specified session
@@ -197,6 +211,13 @@ func NewEndpoint(
 	unidirectional := synchronizationMode == core.SynchronizationMode_SynchronizationModeOneWaySafe ||
 		synchronizationMode == core.SynchronizationMode_SynchronizationModeOneWayReplica
 	readOnly := alpha && unidirectional
+
+	// Compute the effective hashing algorithm and create the hasher factory.
+	hashingAlgorithm := configuration.HashingAlgorithm
+	if hashingAlgorithm.IsDefault() {
+		hashingAlgorithm = version.DefaultHashingAlgorithm()
+	}
+	hasherFactory := hashingAlgorithm.Factory()
 
 	// Determine the maximum entry count.
 	maximumEntryCount := configuration.MaximumEntryCount
@@ -254,19 +275,41 @@ func NewEndpoint(
 		symbolicLinkMode = version.DefaultSymbolicLinkMode()
 	}
 
-	// Compute the effective VCS ignore mode.
+	// Compute the effective ignore syntax.
+	ignoreSyntax := configuration.IgnoreSyntax
+	if ignoreSyntax.IsDefault() {
+		ignoreSyntax = version.DefaultIgnoreSyntax()
+	}
+
+	// Compute a combined ignore list and create the ignorer.
+	var ignores []string
+	ignores = append(ignores, configuration.DefaultIgnores...)
+	ignores = append(ignores, configuration.Ignores...)
+	var ignorer ignore.Ignorer
+	if ignoreSyntax == ignore.Syntax_SyntaxMutagen {
+		if i, err := mutagenignore.NewIgnorer(ignores); err != nil {
+			return nil, fmt.Errorf("unable to create Mutagen-style ignorer: %w", err)
+		} else {
+			ignorer = i
+		}
+	} else if ignoreSyntax == ignore.Syntax_SyntaxDocker {
+		if i, err := dockerignore.NewIgnorer(ignores); err != nil {
+			return nil, fmt.Errorf("unable to create Docker-style ignorer: %w", err)
+		} else {
+			ignorer = i
+		}
+	} else {
+		panic("unhandled ignore syntax")
+	}
+
+	// Compute the effective VCS ignore mode and add VCS ignores if necessary.
 	ignoreVCSMode := configuration.IgnoreVCSMode
 	if ignoreVCSMode.IsDefault() {
 		ignoreVCSMode = version.DefaultIgnoreVCSMode()
 	}
-
-	// Compute a combined ignore list.
-	var ignores []string
-	if ignoreVCSMode == core.IgnoreVCSMode_IgnoreVCSModeIgnore {
-		ignores = append(ignores, core.DefaultVCSIgnores...)
+	if ignoreVCSMode == ignore.IgnoreVCSMode_IgnoreVCSModeIgnore {
+		ignorer = ignore.IgnoreVCS(ignorer)
 	}
-	ignores = append(ignores, configuration.DefaultIgnores...)
-	ignores = append(ignores, configuration.Ignores...)
 
 	// Track whether or not any non-default ownership or directory permissions
 	// are set. We don't care about non-default file permissions since we're
@@ -412,6 +455,10 @@ func NewEndpoint(
 	// Create a channel to track the watch Goroutine.
 	watchDone := make(chan struct{})
 
+	// Create the scan lock.
+	scanLock := make(chan struct{}, 1)
+	scanLock <- struct{}{}
+
 	// Create the endpoint.
 	endpoint := &endpoint{
 		logger:                       logger,
@@ -422,7 +469,6 @@ func NewEndpoint(
 		accelerationAllowed:          accelerationAllowed,
 		probeMode:                    probeMode,
 		symbolicLinkMode:             symbolicLinkMode,
-		ignores:                      ignores,
 		permissionsMode:              permissionsMode,
 		defaultFileMode:              defaultFileMode,
 		defaultDirectoryMode:         defaultDirectoryMode,
@@ -433,13 +479,15 @@ func NewEndpoint(
 		watchDone:                    watchDone,
 		pollSignal:                   state.NewCoalescer(pollSignalCoalescingWindow),
 		recursiveWatchRetryEstablish: make(chan struct{}),
-		hasher:                       version.Hasher(),
+		scanLock:                     scanLock,
+		hasher:                       hasherFactory(),
 		cache:                        cache,
-		stager: newStager(
+		ignorer:                      ignorer,
+		stager: staging.NewStager(
 			stagingRoot,
 			hideStagingRoot,
-			version.Hasher(),
 			maximumStagingFileSize,
+			hasherFactory,
 		),
 	}
 
@@ -467,6 +515,25 @@ func NewEndpoint(
 
 	// Success.
 	return endpoint, nil
+}
+
+// lockScanLock acquires the scan lock in a preemptable fashion. To disable
+// preemption, pass context.Background(). This method returns true if the lock
+// is acquired and false otherwise. It will only return false if preemption
+// occurred via the provided context.
+func (e *endpoint) lockScanLock(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-e.scanLock:
+		return true
+	}
+}
+
+// unlockScanLock releases the scan lock. It should only be called by the
+// current holder of the scan lock.
+func (e *endpoint) unlockScanLock() {
+	e.scanLock <- struct{}{}
 }
 
 // saveCache serializes the cache and writes the result to disk at regular
@@ -497,12 +564,12 @@ func (e *endpoint) saveCache(ctx context.Context, cachePath string, signal <-cha
 			}
 
 			// Grab the scan lock.
-			e.scanLock.Lock()
+			e.lockScanLock(context.Background())
 
 			// If the cache hasn't changed since the last write, then skip this
 			// save request.
 			if e.cache == lastSavedCache {
-				e.scanLock.Unlock()
+				e.unlockScanLock()
 				continue
 			}
 
@@ -511,7 +578,7 @@ func (e *endpoint) saveCache(ctx context.Context, cachePath string, signal <-cha
 			if err := encoding.MarshalAndSaveProtobuf(cachePath, e.cache); err != nil {
 				e.logger.Error("Cache save failed:", err)
 				e.cacheWriteError = err
-				e.scanLock.Unlock()
+				e.unlockScanLock()
 				return
 			}
 
@@ -520,19 +587,8 @@ func (e *endpoint) saveCache(ctx context.Context, cachePath string, signal <-cha
 			lastSaveTime = now
 
 			// Release the cache lock.
-			e.scanLock.Unlock()
+			e.unlockScanLock()
 		}
-	}
-}
-
-// stopAndDrainTimer stops a timer and performs a non-blocking drain on its
-// channel. This allows a timer to be stopped and drained without any knowledge
-// of its current state.
-func stopAndDrainTimer(timer *time.Timer) {
-	timer.Stop()
-	select {
-	case <-timer.C:
-	default:
 	}
 }
 
@@ -620,9 +676,9 @@ func (e *endpoint) watchPoll(ctx context.Context, pollingInterval uint32, nonRec
 
 				// Ensure that accelerated watching is disabled, if necessary.
 				if e.accelerationAllowed {
-					e.scanLock.Lock()
+					e.lockScanLock(context.Background())
 					e.accelerate = false
-					e.scanLock.Unlock()
+					e.unlockScanLock()
 				}
 
 				// Terminate polling.
@@ -673,7 +729,7 @@ func (e *endpoint) watchPoll(ctx context.Context, pollingInterval uint32, nonRec
 		}
 
 		// Grab the scan lock.
-		e.scanLock.Lock()
+		e.lockScanLock(context.Background())
 
 		// Disable the use of the existing scan results.
 		e.accelerate = false
@@ -688,7 +744,7 @@ func (e *endpoint) watchPoll(ctx context.Context, pollingInterval uint32, nonRec
 			logger.Debug("Scan failed:", err)
 
 			// Release the scan lock.
-			e.scanLock.Unlock()
+			e.unlockScanLock()
 
 			// Strobe the poll signal and continue polling.
 			e.pollSignal.Strobe()
@@ -707,7 +763,7 @@ func (e *endpoint) watchPoll(ctx context.Context, pollingInterval uint32, nonRec
 		snapshot := e.snapshot
 
 		// Release the scan lock.
-		e.scanLock.Unlock()
+		e.unlockScanLock()
 
 		// Check for modifications.
 		modified := !snapshot.Equal(previous)
@@ -767,7 +823,7 @@ func (e *endpoint) watchRecursive(ctx context.Context, pollingInterval uint32) {
 	// Create a timer, initially stopped and drained, that we can use to
 	// regulate waiting periods. Also, ensure that it's stopped when we return.
 	timer := time.NewTimer(0)
-	stopAndDrainTimer(timer)
+	timeutil.StopAndDrainTimer(timer)
 	defer timer.Stop()
 
 	// Loop until cancellation.
@@ -795,7 +851,7 @@ WatchEstablishment:
 				continue
 			case <-e.recursiveWatchRetryEstablish:
 				logger.Debug("Received recursive watch establishment suggestion")
-				stopAndDrainTimer(timer)
+				timeutil.StopAndDrainTimer(timer)
 				continue
 			}
 		}
@@ -824,10 +880,10 @@ WatchEstablishment:
 
 				// Ensure that accelerated watching is disabled, if necessary.
 				if e.accelerationAllowed {
-					e.scanLock.Lock()
+					e.lockScanLock(context.Background())
 					e.accelerate = false
 					e.recheckPaths = nil
-					e.scanLock.Unlock()
+					e.unlockScanLock()
 				}
 
 				// Terminate watching.
@@ -837,7 +893,7 @@ WatchEstablishment:
 				logger.Debug("Attempting to enable accelerated scanning")
 
 				// Attempt to perform a baseline scan to enable acceleration.
-				e.scanLock.Lock()
+				e.lockScanLock(context.Background())
 				if err := e.scan(ctx, nil, nil); err != nil {
 					logger.Debug("Unable to perform baseline scan:", err)
 					timer.Reset(pollingDuration)
@@ -846,7 +902,7 @@ WatchEstablishment:
 					e.accelerate = true
 					e.recheckPaths = make(map[string]bool)
 				}
-				e.scanLock.Unlock()
+				e.unlockScanLock()
 
 				// Strobe the poll signal, regardless of outcome. The likely
 				// outcome is that we succeeded in enabling acceleration, but
@@ -860,14 +916,14 @@ WatchEstablishment:
 				// If acceleration is allowed on the endpoint, then disable scan
 				// acceleration and clear out the re-check paths.
 				if e.accelerationAllowed {
-					e.scanLock.Lock()
+					e.lockScanLock(context.Background())
 					e.accelerate = false
 					e.recheckPaths = nil
-					e.scanLock.Unlock()
+					e.unlockScanLock()
 				}
 
 				// Stop and drain the timer, which may be running.
-				stopAndDrainTimer(timer)
+				timeutil.StopAndDrainTimer(timer)
 
 				// Strobe the poll signal since something has occurred that's
 				// killed our watch.
@@ -901,7 +957,7 @@ WatchEstablishment:
 				// temporary directories (whose contents may have non-temporary
 				// names, such as in the case of internal staging directories).
 				ignore := strings.HasPrefix(path, filesystem.TemporaryNamePrefix) ||
-					strings.HasPrefix(core.PathBase(path), filesystem.TemporaryNamePrefix)
+					strings.HasPrefix(fastpath.Base(path), filesystem.TemporaryNamePrefix)
 				if ignore {
 					logger.Tracef("Ignoring event path: \"%s\"", path)
 					continue
@@ -915,11 +971,11 @@ WatchEstablishment:
 				// otherwise we're still in a pre-baseline scan state and don't
 				// need to record these events.
 				if e.accelerationAllowed {
-					e.scanLock.Lock()
+					e.lockScanLock(context.Background())
 					if e.accelerate {
 						e.recheckPaths[path] = true
 					}
-					e.scanLock.Unlock()
+					e.unlockScanLock()
 				}
 
 				// Strobe the poll signal to signal the event.
@@ -950,7 +1006,7 @@ func (e *endpoint) scan(ctx context.Context, baseline *core.Snapshot, recheckPat
 		e.root,
 		baseline, recheckPaths,
 		e.hasher, e.cache,
-		e.ignores, e.ignoreCache,
+		e.ignorer, e.ignoreCache,
 		e.probeMode,
 		e.symbolicLinkMode,
 		e.permissionsMode,
@@ -981,9 +1037,12 @@ func (e *endpoint) scan(ctx context.Context, baseline *core.Snapshot, recheckPat
 
 // Scan implements the Scan method for local endpoints.
 func (e *endpoint) Scan(ctx context.Context, _ *core.Entry, full bool) (*core.Snapshot, error, bool) {
-	// Grab the scan lock and defer its release.
-	e.scanLock.Lock()
-	defer e.scanLock.Unlock()
+	// Grab the scan lock and defer its release. If lock acquisition is
+	// preempted, then the controller has cancelled the request.
+	if !e.lockScanLock(ctx) {
+		return nil, fmt.Errorf("scan cancelled: %w", context.Canceled), false
+	}
+	defer e.unlockScanLock()
 
 	// Before attempting to perform a scan, check for any cache write errors
 	// that may have occurred during background cache writes. If we see any
@@ -1015,7 +1074,7 @@ func (e *endpoint) Scan(ctx context.Context, _ *core.Entry, full bool) (*core.Sn
 		if e.watchMode == reifiedWatchModeRecursive {
 			e.logger.Debug("Performing accelerated scan with", len(e.recheckPaths), "recheck paths")
 			if err := e.scan(ctx, e.snapshot, e.recheckPaths); err != nil {
-				return nil, err, true
+				return nil, err, !errors.Is(err, core.ErrScanCancelled)
 			} else {
 				e.recheckPaths = make(map[string]bool)
 			}
@@ -1086,9 +1145,10 @@ func (e *endpoint) stageFromRoot(
 		return false
 	}
 
-	// Ensure that everything staged correctly.
-	_, err = e.stager.Provide(path, digest)
-	return err == nil
+	// Verify that everything staged correctly, ensuring that the source file
+	// wasn't modified during the copy operation.
+	success, _ := e.stager.Contains(path, digest)
+	return success
 }
 
 // Stage implements the Stage method for local endpoints.
@@ -1107,13 +1167,13 @@ func (e *endpoint) Stage(paths []string, digests [][]byte) ([]string, []*rsync.S
 
 	// Grab the scan lock. We'll need this to verify the last scan entry count
 	// and to generate the reverse lookup map.
-	e.scanLock.Lock()
+	e.lockScanLock(context.Background())
 
 	// Verify that we've performed a scan since the last staging operation, that
 	// way our count check is valid. If we haven't, then the controller is
 	// either malfunctioning or malicious.
 	if !e.scannedSinceLastStageCall {
-		e.scanLock.Unlock()
+		e.unlockScanLock()
 		return nil, nil, nil, errors.New("multiple staging operations performed without scan")
 	}
 	e.scannedSinceLastStageCall = false
@@ -1121,7 +1181,7 @@ func (e *endpoint) Stage(paths []string, digests [][]byte) ([]string, []*rsync.S
 	// Verify that the number of paths provided isn't going to put us over the
 	// maximum number of allowed entries.
 	if e.maximumEntryCount != 0 && (e.maximumEntryCount-e.lastScanEntryCount) < uint64(len(paths)) {
-		e.scanLock.Unlock()
+		e.unlockScanLock()
 		return nil, nil, nil, errors.New("staging would exceeded allowed entry count")
 	}
 
@@ -1129,12 +1189,18 @@ func (e *endpoint) Stage(paths []string, digests [][]byte) ([]string, []*rsync.S
 	// detect renames and copies.
 	reverseLookupMap, err := e.cache.GenerateReverseLookupMap()
 	if err != nil {
-		e.scanLock.Unlock()
+		e.unlockScanLock()
 		return nil, nil, nil, fmt.Errorf("unable to generate reverse lookup map: %w", err)
 	}
 
 	// Release the scan lock.
-	e.scanLock.Unlock()
+	e.unlockScanLock()
+
+	// Inform the stager that we're about to begin staging and transition
+	// operations.
+	if err := e.stager.Initialize(); err != nil {
+		return nil, nil, nil, fmt.Errorf("unable to initialize stager: %w", err)
+	}
 
 	// Create an opener that we can use file opening and defer its closure. We
 	// can't cache this across synchronization cycles since its path references
@@ -1155,7 +1221,9 @@ func (e *endpoint) Stage(paths []string, digests [][]byte) ([]string, []*rsync.S
 	filteredPaths := paths[:0]
 	for p, path := range paths {
 		digest := digests[p]
-		if _, err := e.stager.Provide(path, digest); err == nil {
+		if available, err := e.stager.Contains(path, digest); err != nil {
+			return nil, nil, nil, fmt.Errorf("unable to query file staging status: %w", err)
+		} else if available {
 			continue
 		} else if e.stageFromRoot(path, digest, reverseLookupMap, opener) {
 			continue
@@ -1173,15 +1241,20 @@ func (e *endpoint) Stage(paths []string, digests [][]byte) ([]string, []*rsync.S
 	// Compute signatures for each of the unstaged paths. For paths that don't
 	// exist or that can't be read, just use an empty signature, which means to
 	// expect/use an empty base when deltifying/patching.
+	//
+	// If the root doesn't exist or doesn't contain any files, then we can just
+	// use an empty signature straight away.
+	rootExistsAndHasFileContents := reverseLookupMap.Length() > 0
+	emptySignature := &rsync.Signature{}
 	signatures := make([]*rsync.Signature, len(filteredPaths))
 	for p, path := range filteredPaths {
-		if base, _, err := opener.OpenFile(path); err != nil {
-			signatures[p] = &rsync.Signature{}
-			continue
+		if !rootExistsAndHasFileContents {
+			signatures[p] = emptySignature
+		} else if base, _, err := opener.OpenFile(path); err != nil {
+			signatures[p] = emptySignature
 		} else if signature, err := engine.Signature(base, 0); err != nil {
 			base.Close()
-			signatures[p] = &rsync.Signature{}
-			continue
+			signatures[p] = emptySignature
 		} else {
 			base.Close()
 			signatures[p] = signature
@@ -1211,8 +1284,8 @@ func (e *endpoint) Transition(ctx context.Context, transitions []*core.Change) (
 	}
 
 	// Grab the scan lock and defer its release.
-	e.scanLock.Lock()
-	defer e.scanLock.Unlock()
+	e.lockScanLock(context.Background())
+	defer e.unlockScanLock()
 
 	// Verify that we've performed a scan since the last transition operation,
 	// that way our count check is valid. If we haven't, then the controller is
@@ -1259,7 +1332,7 @@ func (e *endpoint) Transition(ctx context.Context, transitions []*core.Change) (
 	// read lastReturnedScanCache and lastReturnedScanSnapshotDecomposesUnicode
 	// because these aren't updated concurrently and thus don't fall under the
 	// scope of the scan lock.
-	e.scanLock.Unlock()
+	e.unlockScanLock()
 	results, problems, stagerMissingFiles := core.Transition(
 		ctx,
 		e.root,
@@ -1272,7 +1345,7 @@ func (e *endpoint) Transition(ctx context.Context, transitions []*core.Change) (
 		e.lastReturnedScanSnapshotDecomposesUnicode,
 		e.stager,
 	)
-	e.scanLock.Lock()
+	e.lockScanLock(context.Background())
 
 	// Determine whether or not the transition made any changes on disk.
 	var transitionMadeChanges bool
@@ -1350,16 +1423,16 @@ func (e *endpoint) Transition(ctx context.Context, transitions []*core.Change) (
 		e.pollSignal.Strobe()
 	}
 
-	// Wipe the staging directory. We don't monitor for errors here, because we
-	// need to return the results and problems no matter what, but if there's
-	// something weird going on with the filesystem, we'll see it the next time
-	// we scan or stage.
+	// Finalize the stager, which will also wipe the staging directory. We don't
+	// monitor for errors here, because we need to return the results and
+	// problems no matter what, but if there's something weird going on with the
+	// filesystem, we'll see it the next time we scan or stage.
 	//
 	// TODO: If we see a large number of problems, should we avoid wiping the
 	// staging directory? It could be due to an easily correctable error, at
 	// which point you wouldn't want to restage if you're talking about lots of
 	// files.
-	e.stager.wipe()
+	e.stager.Finalize()
 
 	// Done.
 	return results, problems, stagerMissingFiles, nil

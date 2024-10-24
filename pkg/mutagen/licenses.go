@@ -4,7 +4,7 @@ package mutagen
 // dependencies.
 const Licenses = `Mutagen
 
-Copyright (c) 2016-present Mutagen IO, Inc.
+Copyright (c) 2016-present Docker, Inc.
 
 Licensed under the terms of the MIT License. A copy of this license can be found
 later in this text or online at https://opensource.org/licenses/MIT.
@@ -14,9 +14,9 @@ later in this text or online at https://opensource.org/licenses/MIT.
 Mutagen depends on the following third-party software:
 ================================================================================
 
-Go, the Go standard library, the Go crypto, net, sys, term, and text
-subrepositories, modified code from the Go standard library, and modified code
-from the build, sys, and exp subrepositories.
+Go, the Go standard library, the Go net, sys, term, and text subrepositories,
+modified code from the Go standard library, and modified code from the build,
+sys, and exp subrepositories.
 
 https://golang.org/
 https://github.com/golang/
@@ -69,9 +69,7 @@ Cobra
 
 https://github.com/spf13/cobra
 
-Copyright 2013 Steve Francia <spf@spf13.com>
-Copyright 2015 Red Hat Inc. All rights reserved.
-Copyright 2016 French Ben. All rights reserved.
+Copyright 2013-2023 The Cobra Authors
 
 Used under the terms of the Apache License, Version 2.0. A copy of this license
 can be found later in this text or online at
@@ -162,6 +160,48 @@ later in this text or online at https://opensource.org/licenses/MIT.
 
 --------------------------------------------------------------------------------
 
+xxh3 (xxHash Library)
+
+https://github.com/zeebo/xxh3
+
+Copyright (c) 2012-2014, Yann Collet
+Copyright (c) 2019, Jeff Wendling
+All rights reserved.
+
+Used under the terms of the 2-Clause BSD License. A copy of this license can be
+found later in this text or online at
+https://opensource.org/licenses/BSD-2-Clause.
+
+--------------------------------------------------------------------------------
+
+compress
+
+http://github.com/klauspost/compress
+
+Copyright (c) 2009-2021 The Go Authors. All rights reserved.
+Copyright (c) 2015-2023 Klaus Post. All rights reserved.
+Copyright (c) 2024+ Klaus Post. All rights reserved.
+Copyright 2011 The Snappy-Go Authors. All rights reserved.
+Based on work Copyright (c) 2013, Yann Collet, released under BSD License.
+Based on work by Yann Collet, released under BSD License.
+
+Used under the terms of the 3-Clause BSD License (Google version). A copy of
+this license can be found later in this text and a templated version can be
+found online at https://opensource.org/licenses/BSD-3-Clause.
+
+--------------------------------------------------------------------------------
+
+cpuid
+
+http://github.com/klauspost/cpuid
+
+Copyright (c) 2015 Klaus Post
+
+Used under the terms of the MIT License. A copy of this license can be found
+later in this text or online at https://opensource.org/licenses/MIT.
+
+--------------------------------------------------------------------------------
+
 go-acl
 
 https://github.com/hectane/go-acl
@@ -190,6 +230,7 @@ Go support for Protocol Buffers
 https://github.com/protocolbuffers/protobuf-go
 
 Copyright (c) 2018 The Go Authors. All rights reserved.
+Copyright 2023 Google Inc. All rights reserved.
 
 Used under the terms of the 3-Clause BSD License (Google version). A copy of
 this license can be found later in this text and a templated version can be
@@ -268,6 +309,7 @@ uuid
 https://github.com/google/uuid
 
 Copyright (c) 2009,2014 Google Inc. All rights reserved.
+Copyright 2023 Google Inc. All rights reserved.
 
 Used under the terms of the 3-Clause BSD License (Google version). A copy of
 this license can be found later in this text and a templated version can be
@@ -322,14 +364,8 @@ Forked and modified at https://github.com/mutagen-io/gopass.
 
 Copyright (c) 2012 Chris Howey
 
-Portions of this package are derived from Solaris sources distributed under the
-Common Development and Distribution License, Version 1.0. These portions are
-consequently released under the same license. Copies of the license are
-available in the above repositories.
-
-The remainder of the package is used under the terms of the ISC License. A copy
-of this license can be found later in this text or online at
-https://opensource.org/licenses/ISC.
+Used under the terms of the ISC License. A copy of this license can be found
+later in this text or online at https://opensource.org/licenses/ISC.
 
 --------------------------------------------------------------------------------
 
@@ -341,6 +377,21 @@ Copyright (c) 2014 Bob Matcuk
 
 Used under the terms of the MIT License. A copy of this license can be found
 later in this text or online at https://opensource.org/licenses/MIT.
+
+--------------------------------------------------------------------------------
+
+patternmatcher
+
+https://github.com/moby/patternmatcher
+
+A subset of this library has been extracted, modified, and vendored inside
+Mutagen at https://github.com/mutagen-io/mutagen.
+
+Copyright 2012-2017 Docker, Inc.
+
+Used under the terms of the Apache License, Version 2.0. A copy of this license
+can be found later in this text or online at
+http://www.apache.org/licenses/LICENSE-2.0.
 
 --------------------------------------------------------------------------------
 
@@ -368,7 +419,7 @@ Copyright (c) 2015 Yoshiki Shibukawa
 
 Used under the terms of the MIT License. A copy of this license can be found
 later in this text or online at https://opensource.org/licenses/MIT.
-
+` + licensesSSPL + `
 
 ================================================================================
 Mutagen is compatible with the following third-party software:
@@ -408,6 +459,31 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+2-Clause BSD License
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------------
 

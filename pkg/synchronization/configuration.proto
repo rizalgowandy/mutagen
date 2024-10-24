@@ -8,10 +8,13 @@ import "filesystem/behavior/probe_mode.proto";
 import "synchronization/scan_mode.proto";
 import "synchronization/stage_mode.proto";
 import "synchronization/watch_mode.proto";
-import "synchronization/core/ignore_vcs_mode.proto";
+import "synchronization/compression/algorithm.proto";
 import "synchronization/core/mode.proto";
 import "synchronization/core/permissions_mode.proto";
 import "synchronization/core/symbolic_link_mode.proto";
+import "synchronization/core/ignore/syntax.proto";
+import "synchronization/core/ignore/ignore_vcs_mode.proto";
+import "synchronization/hashing/algorithm.proto";
 
 // Configuration encodes session configuration parameters. It is used for create
 // commands to specify configuration options, for loading global configuration
@@ -21,11 +24,17 @@ message Configuration {
     // Synchronization parameters (fields 11-20).
     // NOTE: These run from field indices 11-20 (rather than 1-10, which are
     // reserved for symbolic link configuration parameters) due to the
-    // historical order in which these fields were added.
+    // historical order in which these fields were added. Field 17 (the digest
+    // algorithm) is also listed out of its chronological order of addition due
+    // to its relative importance in the configuration.
 
     // SynchronizationMode specifies the synchronization mode that should be
     // used in synchronization.
     core.SynchronizationMode synchronizationMode = 11;
+
+    // HashingAlgorithm specifies the content hashing algorithm used to track
+    // content and perform differential transfers.
+    hashing.Algorithm hashingAlgorithm = 17;
 
     // MaximumEntryCount specifies the maximum number of filesystem entries that
     // endpoints will tolerate managing. A zero value indicates no limit.
@@ -44,7 +53,7 @@ message Configuration {
     // StageMode specifies the file staging mode.
     StageMode stageMode = 16;
 
-    // Fields 17-20 are reserved for future synchronization configuration
+    // Fields 18-20 are reserved for future synchronization configuration
     // parameters.
 
 
@@ -75,6 +84,11 @@ message Configuration {
 
     // Ignore configuration parameters (fields 31-60).
 
+    // IgnoreSyntax specifies the syntax and semantics to use for ignores.
+    // NOTE: This field is out of order due to the historical order in which it
+    // was added.
+    ignore.Syntax ignoreSyntax = 34;
+
     // DefaultIgnores specifies the ignore patterns brought in from the global
     // configuration.
     // DEPRECATED: This field is no longer used when loading from global
@@ -88,9 +102,9 @@ message Configuration {
 
     // IgnoreVCSMode specifies the VCS ignore mode that should be used in
     // synchronization.
-    core.IgnoreVCSMode ignoreVCSMode = 33;
+    ignore.IgnoreVCSMode ignoreVCSMode = 33;
 
-    // Fields 34-60 are reserved for future ignore configuration parameters.
+    // Fields 35-60 are reserved for future ignore configuration parameters.
 
 
     // Permissions configuration parameters (fields 61-80).
@@ -120,4 +134,14 @@ message Configuration {
     string defaultGroup = 66;
 
     // Fields 67-80 are reserved for future permission configuration parameters.
+
+
+    // Compression configuration parameters (fields 81-90).
+
+    // CompressionAlgorithm specifies the compression algorithm to use when
+    // communicating with the endpoint. This only applies to remote endpoints.
+    compression.Algorithm compressionAlgorithm = 81;
+
+    // Fields 82-90 are reserved for future compression configuration
+    // parameters.
 }

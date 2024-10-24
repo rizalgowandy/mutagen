@@ -1,4 +1,4 @@
-//go:build sspl
+//go:build mutagensspl
 
 package mutagen
 
@@ -7,13 +7,30 @@ package mutagen
 const mutagenSSPLEnhancementsHeader = `
 Mutagen SSPL-Licensed Enhancements
 
-Copyright (c) 2020-present Mutagen IO, Inc.
+Copyright (c) 2020-present Docker, Inc.
 
 This executable contains Mutagen enhancements licensed under the terms of the
 Server Side Public License, version 1, as published by MongoDB, Inc. A copy of
 this license can be found later in this text or online at
 http://www.mongodb.com/licensing/server-side-public-license.
 
+`
+
+// licensesSSPL is an additional message to include in the license text if using
+// SSPL-licensed enhancements.
+const licensesSSPL = `
+--------------------------------------------------------------------------------
+
+xxhash
+
+https://github.com/cespare/xxhash
+
+Vendored inside http://github.com/klauspost/compress.
+
+Copyright (c) 2016 Caleb Spare
+
+Used under the terms of the MIT License. A copy of this license can be found
+later in this text or online at https://opensource.org/licenses/MIT.
 `
 
 // licenseTextSSPL is the Server Side Public License content to include in the

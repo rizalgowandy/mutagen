@@ -16,6 +16,7 @@ func TestEntryKindSynchronizable(t *testing.T) {
 		{EntryKind_SymbolicLink, true},
 		{EntryKind_Untracked, false},
 		{EntryKind_Problematic, false},
+		{EntryKind_PhantomDirectory, false},
 	}
 
 	// Process test cases.
@@ -23,6 +24,44 @@ func TestEntryKindSynchronizable(t *testing.T) {
 		if synchronizable := test.kind.synchronizable(); synchronizable != test.expected {
 			t.Errorf("test case %d: synchronizability does not match expected: %t != %t",
 				i, synchronizable, test.expected,
+			)
+		}
+	}
+}
+
+// TestEntryKindUnmarshal tests that unmarshaling from a string specification
+// succeeeds for EntryKind.
+func TestEntryKindUnmarshal(t *testing.T) {
+	// Set up test cases.
+	testCases := []struct {
+		text          string
+		expected      EntryKind
+		expectFailure bool
+	}{
+		{"", EntryKind_Directory, true},
+		{"asdf", EntryKind_Directory, true},
+		{"directory", EntryKind_Directory, false},
+		{"file", EntryKind_File, false},
+		{"symlink", EntryKind_SymbolicLink, false},
+		{"untracked", EntryKind_Untracked, false},
+		{"problematic", EntryKind_Problematic, false},
+		{"phantom-directory", EntryKind_PhantomDirectory, false},
+	}
+
+	// Process test cases.
+	for _, testCase := range testCases {
+		var kind EntryKind
+		if err := kind.UnmarshalText([]byte(testCase.text)); err != nil {
+			if !testCase.expectFailure {
+				t.Errorf("unable to unmarshal text (%s): %s", testCase.text, err)
+			}
+		} else if testCase.expectFailure {
+			t.Error("unmarshaling succeeded unexpectedly for text:", testCase.text)
+		} else if kind != testCase.expected {
+			t.Errorf(
+				"unmarshaled entry kind (%s) does not match expected (%s)",
+				kind,
+				testCase.expected,
 			)
 		}
 	}
@@ -36,9 +75,13 @@ func init() {
 // entryEnsureValidTestCases are test cases shared between TestEntryEnsureValid,
 // TestArchiveEnsureValid, and TestChangeEnsureValid.
 var entryEnsureValidTestCases = []struct {
-	entry          *Entry
+	// entry is the entry to validate.
+	entry *Entry
+	// synchronizable is the synchronizability condition under which to run
+	// validation.
 	synchronizable bool
-	expected       bool
+	// expected is the expected validity.
+	expected bool
 }{
 	// Test synchronizable content.
 	{tN, false, true},
@@ -75,6 +118,10 @@ var entryEnsureValidTestCases = []struct {
 	{tDU, true, false},
 	{tDP1, false, true},
 	{tDP1, true, false},
+	{tPD0, false, true},
+	{tPD0, true, false},
+	{tDPD0, false, true},
+	{tDPD0, true, false},
 
 	// Test invalid content.
 	{tIDDE, false, false},
@@ -218,7 +265,7 @@ func TestEntryWalk(t *testing.T) {
 		// Perform walking and record visits.
 		var visits []testEntryWalkVisit
 		test.entry.walk(test.path, func(path string, entry *Entry) {
-			visits = append(visits, testEntryWalkVisit{path, entry.Copy(false)})
+			visits = append(visits, testEntryWalkVisit{path, entry.Copy(EntryCopyBehaviorSlim)})
 		}, test.reverse)
 
 		// Verify that the number of visits was correct.
@@ -312,6 +359,8 @@ func TestEntryEqual(t *testing.T) {
 		{tDU, tDU, true, true},
 		{tDP1, tDP1, false, true},
 		{tDP1, tDP1, true, true},
+		{tPD0, tPD0, false, true},
+		{tPD0, tPD0, true, true},
 	}
 
 	// Process test cases.
@@ -342,44 +391,61 @@ func TestEntryEqual(t *testing.T) {
 	}
 }
 
-// TestEntryCopy tests Entry.copy.
+// TestEntryCopy tests Entry.Copy.
 func TestEntryCopy(t *testing.T) {
 	// Define test cases.
 	tests := []struct {
-		entry    *Entry
-		deep     bool
-		expected *Entry
+		entry        *Entry
+		copyBehavior EntryCopyBehavior
+		expected     *Entry
 	}{
-		{tN, false, tN},
-		{tN, true, tN},
-		{tF1, false, tF1},
-		{tF1, true, tF1},
-		{tF3E, false, tF3E},
-		{tF3E, true, tF3E},
-		{tSA, false, tSA},
-		{tSA, true, tSA},
-		{tD0, false, tD0},
-		{tD0, true, tD0},
-		{tD1, false, tD0},
-		{tD1, true, tD1},
-		{tU, false, tU},
-		{tU, true, tU},
-		{tP1, false, tP1},
-		{tP1, true, tP1},
+		{tN, EntryCopyBehaviorDeep, tN},
+		{tN, EntryCopyBehaviorDeepPreservingLeaves, tN},
+		{tN, EntryCopyBehaviorShallow, tN},
+		{tN, EntryCopyBehaviorSlim, tN},
+
+		{tF1, EntryCopyBehaviorDeep, tF1},
+		{tF1, EntryCopyBehaviorDeepPreservingLeaves, tF1},
+		{tF1, EntryCopyBehaviorShallow, tF1},
+		{tF1, EntryCopyBehaviorSlim, tF1},
+
+		{tF3E, EntryCopyBehaviorDeep, tF3E},
+		{tF3E, EntryCopyBehaviorDeepPreservingLeaves, tF3E},
+		{tF3E, EntryCopyBehaviorShallow, tF3E},
+		{tF3E, EntryCopyBehaviorSlim, tF3E},
+
+		{tSA, EntryCopyBehaviorDeep, tSA},
+		{tSA, EntryCopyBehaviorDeepPreservingLeaves, tSA},
+		{tSA, EntryCopyBehaviorShallow, tSA},
+		{tSA, EntryCopyBehaviorSlim, tSA},
+
+		{tD0, EntryCopyBehaviorDeep, tD0},
+		{tD0, EntryCopyBehaviorDeepPreservingLeaves, tD0},
+		{tD0, EntryCopyBehaviorShallow, tD0},
+		{tD0, EntryCopyBehaviorSlim, tD0},
+
+		{tD1, EntryCopyBehaviorDeep, tD1},
+		{tD1, EntryCopyBehaviorDeepPreservingLeaves, tD1},
+		{tD1, EntryCopyBehaviorShallow, tD1},
+		{tD1, EntryCopyBehaviorSlim, tD0},
+
+		{tU, EntryCopyBehaviorDeep, tU},
+		{tU, EntryCopyBehaviorDeepPreservingLeaves, tU},
+		{tU, EntryCopyBehaviorShallow, tU},
+		{tU, EntryCopyBehaviorSlim, tU},
+
+		{tP1, EntryCopyBehaviorDeep, tP1},
+		{tP1, EntryCopyBehaviorDeepPreservingLeaves, tP1},
+		{tP1, EntryCopyBehaviorShallow, tP1},
+		{tP1, EntryCopyBehaviorSlim, tP1},
 	}
 
 	// Process test cases.
 	for i, test := range tests {
-		// Compute a description for the test in case we need it.
-		description := "shallow"
-		if test.deep {
-			description = "deep"
-		}
-
 		// Perform copying and verify that the result matches what's expected.
-		result := test.entry.Copy(test.deep)
+		result := test.entry.Copy(test.copyBehavior)
 		if !result.Equal(test.expected, true) {
-			t.Errorf("test index %d: (%s) copy result does not match expected", i, description)
+			t.Errorf("test index %d: copy result does not match expected", i)
 		}
 	}
 }

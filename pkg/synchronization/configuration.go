@@ -6,7 +6,9 @@ import (
 
 	"github.com/mutagen-io/mutagen/pkg/comparison"
 	"github.com/mutagen-io/mutagen/pkg/filesystem"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/compression"
 	"github.com/mutagen-io/mutagen/pkg/synchronization/core"
+	"github.com/mutagen-io/mutagen/pkg/synchronization/hashing"
 )
 
 // EnsureValid ensures that Configuration's invariants are respected. The
@@ -29,28 +31,44 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 		}
 	}
 
+	// Verify that the hashing algorithm is unspecified or supported.
+	if endpointSpecific {
+		if !c.HashingAlgorithm.IsDefault() {
+			return errors.New("hashing algorithm cannot be specified on an endpoint-specific basis")
+		}
+	} else {
+		if !c.HashingAlgorithm.IsDefault() {
+			supportStatus := c.HashingAlgorithm.SupportStatus()
+			if supportStatus == hashing.AlgorithmSupportStatusUnsupported {
+				return errors.New("unknown or unsupported hashing algorithm")
+			} else if supportStatus == hashing.AlgorithmSupportStatusRequiresLicense {
+				return errors.New("hashing algorithm requires Mutagen Pro license")
+			}
+		}
+	}
+
 	// The maximum entry count doesn't need to be validated - any of its values
 	// are technically valid regardless of the source.
 
 	// The maximum staging file size doesn't need to be validated - any of its
 	// values are technically valid regardless of the source.
 
-	// Verify that the probe mode is unspecified or supported for usage.
+	// Verify that the probe mode is unspecified or supported.
 	if !(c.ProbeMode.IsDefault() || c.ProbeMode.Supported()) {
 		return errors.New("unknown or unsupported probe mode")
 	}
 
-	// Verify that the scan mode is unspecified or supported for usage.
+	// Verify that the scan mode is unspecified or supported.
 	if !(c.ScanMode.IsDefault() || c.ScanMode.Supported()) {
 		return errors.New("unknown or unsupported scan mode")
 	}
 
-	// Verify that the staging mode is unspecified or supported for usage.
+	// Verify that the staging mode is unspecified or supported.
 	if !(c.StageMode.IsDefault() || c.StageMode.Supported()) {
 		return errors.New("unknown or unsupported staging mode")
 	}
 
-	// Verify that the symbolic link mode is unspecified or supported for usage.
+	// Verify that the symbolic link mode is unspecified or supported.
 	if endpointSpecific {
 		if !c.SymbolicLinkMode.IsDefault() {
 			return errors.New("symbolic link mode cannot be specified on an endpoint-specific basis")
@@ -61,7 +79,7 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 		}
 	}
 
-	// Verify that the watch mode is unspecified or supported for usage.
+	// Verify that the watch mode is unspecified or supported.
 	if !(c.WatchMode.IsDefault() || c.WatchMode.Supported()) {
 		return errors.New("unknown or unsupported watch mode")
 	}
@@ -69,32 +87,43 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 	// The watch polling interval doesn't need to be validated - any of its
 	// values are technically valid regardless of the source.
 
+	// Verify that the ignore syntax is unspecified or supported.
+	if endpointSpecific {
+		if !c.IgnoreSyntax.IsDefault() {
+			return errors.New("ignore syntax cannot be specified on an endpoint-specific basis")
+		}
+	} else {
+		if !(c.IgnoreSyntax.IsDefault() || c.IgnoreSyntax.Supported()) {
+			return errors.New("unknown or unsupported ignore syntax")
+		}
+	}
+
 	// Verify that default ignores are unset for endpoint-specific
-	// configurations and that any specified ignores are valid. This field is
-	// deprecated, but existing sessions may have it set, in which case we'll
-	// just prepend it to the nominal list of ignores when running the session.
-	// We don't bother rejecting its presence based on source.
+	// configurations. This field is deprecated, but existing sessions may have
+	// it set, in which case we'll just prepend it to the nominal list of
+	// ignores when running the session. We don't bother rejecting its presence
+	// based on source. This is the only meaningful validation that we can do
+	// here because we don't yet know the ignore syntax being used (even if it's
+	// not a default value, it could be overridden in a different configuration
+	// that will be merged on top of this one). These ignores will eventually be
+	// validated at endpoint initialization time, but there's no convenient way
+	// to do it earlier in the session creation or loading process.
 	if endpointSpecific && len(c.DefaultIgnores) > 0 {
 		return errors.New("default ignores cannot be specified on an endpoint-specific basis (and are deprecated)")
 	}
-	for _, ignore := range c.DefaultIgnores {
-		if !core.ValidIgnorePattern(ignore) {
-			return fmt.Errorf("invalid default ignore pattern: %s", ignore)
-		}
-	}
 
-	// Verify that ignores are unset for endpoint-specific configurations and
-	// that any specified ignores are valid.
+	// Verify that ignores are unset for endpoint-specific configurations. This
+	// is the only meaningful validation that we can do here because we don't
+	// yet know the ignore syntax being used (even if it's not a default value,
+	// it could be overridden in a different configuration that will be merged
+	// on top of this one). These ignores will eventually be validated at
+	// endpoint initialization time, but there's no convenient way to do it
+	// earlier in the session creation or loading process.
 	if endpointSpecific && len(c.Ignores) > 0 {
 		return errors.New("ignores cannot be specified on an endpoint-specific basis")
 	}
-	for _, ignore := range c.Ignores {
-		if !core.ValidIgnorePattern(ignore) {
-			return fmt.Errorf("invalid ignore pattern: %s", ignore)
-		}
-	}
 
-	// Verify that the VCS ignore mode is unspecified or supported for usage.
+	// Verify that the VCS ignore mode is unspecified or supported.
 	if endpointSpecific {
 		if !c.IgnoreVCSMode.IsDefault() {
 			return errors.New("VCS ignore mode cannot be specified on an endpoint-specific basis")
@@ -105,8 +134,8 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 		}
 	}
 
-	// Verify that the permissions mode is unspecified or supported for usage.
-	// Also determine the effective permissions mode for validating file and
+	// Verify that the permissions mode is unspecified or supported. Also
+	// determine the effective permissions mode for validating file and
 	// directory modes.
 	var effectivePermissionsMode core.PermissionsMode
 	if endpointSpecific {
@@ -116,7 +145,7 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 	} else {
 		if c.PermissionsMode.IsDefault() {
 			// HACK: We don't have a reference to the session version in this
-			// method, so we compute the permissions mode default by using the
+			// method, so we compute the default permissions mode by using the
 			// default session version for the current version of Mutagen. For
 			// more information on the reasoning behind this, see the note in
 			// Version.DefaultPermissionsMode.
@@ -164,6 +193,16 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 		}
 	}
 
+	// Verify that the compression algorithm is unspecified or supported.
+	if !c.CompressionAlgorithm.IsDefault() {
+		supportStatus := c.CompressionAlgorithm.SupportStatus()
+		if supportStatus == compression.AlgorithmSupportStatusUnsupported {
+			return errors.New("unknown or unsupported compression algorithm")
+		} else if supportStatus == compression.AlgorithmSupportStatusRequiresLicense {
+			return errors.New("compression algorithm requires Mutagen Pro license")
+		}
+	}
+
 	// Success.
 	return nil
 }
@@ -178,6 +217,7 @@ func (c *Configuration) Equal(other *Configuration) bool {
 
 	// Perform an equivalence check.
 	return c.SynchronizationMode == other.SynchronizationMode &&
+		c.HashingAlgorithm == other.HashingAlgorithm &&
 		c.MaximumEntryCount == other.MaximumEntryCount &&
 		c.MaximumStagingFileSize == other.MaximumStagingFileSize &&
 		c.ProbeMode == other.ProbeMode &&
@@ -186,6 +226,7 @@ func (c *Configuration) Equal(other *Configuration) bool {
 		c.SymbolicLinkMode == other.SymbolicLinkMode &&
 		c.WatchMode == other.WatchMode &&
 		c.WatchPollingInterval == other.WatchPollingInterval &&
+		c.IgnoreSyntax == other.IgnoreSyntax &&
 		comparison.StringSlicesEqual(c.DefaultIgnores, other.DefaultIgnores) &&
 		comparison.StringSlicesEqual(c.Ignores, other.Ignores) &&
 		c.IgnoreVCSMode == other.IgnoreVCSMode &&
@@ -193,7 +234,8 @@ func (c *Configuration) Equal(other *Configuration) bool {
 		c.DefaultFileMode == other.DefaultFileMode &&
 		c.DefaultDirectoryMode == other.DefaultDirectoryMode &&
 		c.DefaultOwner == other.DefaultOwner &&
-		c.DefaultGroup == other.DefaultGroup
+		c.DefaultGroup == other.DefaultGroup &&
+		c.CompressionAlgorithm == other.CompressionAlgorithm
 }
 
 // MergeConfigurations merges two configurations of differing priorities. Both
@@ -202,67 +244,81 @@ func MergeConfigurations(lower, higher *Configuration) *Configuration {
 	// Create the resulting configuration.
 	result := &Configuration{}
 
-	// Merge synchronization mode.
+	// Merge the synchronization mode.
 	if !higher.SynchronizationMode.IsDefault() {
 		result.SynchronizationMode = higher.SynchronizationMode
 	} else {
 		result.SynchronizationMode = lower.SynchronizationMode
 	}
 
-	// Merge maximum entry count.
+	// Merge the hashing algorithm.
+	if !higher.HashingAlgorithm.IsDefault() {
+		result.HashingAlgorithm = higher.HashingAlgorithm
+	} else {
+		result.HashingAlgorithm = lower.HashingAlgorithm
+	}
+
+	// Merge the maximum entry count.
 	if higher.MaximumEntryCount != 0 {
 		result.MaximumEntryCount = higher.MaximumEntryCount
 	} else {
 		result.MaximumEntryCount = lower.MaximumEntryCount
 	}
 
-	// Merge maximum staging file size.
+	// Merge the maximum staging file size.
 	if higher.MaximumStagingFileSize != 0 {
 		result.MaximumStagingFileSize = higher.MaximumStagingFileSize
 	} else {
 		result.MaximumStagingFileSize = lower.MaximumStagingFileSize
 	}
 
-	// Merge probing mode.
+	// Merge the probing mode.
 	if !higher.ProbeMode.IsDefault() {
 		result.ProbeMode = higher.ProbeMode
 	} else {
 		result.ProbeMode = lower.ProbeMode
 	}
 
-	// Merge scanning mode.
+	// Merge the scanning mode.
 	if !higher.ScanMode.IsDefault() {
 		result.ScanMode = higher.ScanMode
 	} else {
 		result.ScanMode = lower.ScanMode
 	}
 
-	// Merge staging mode.
+	// Merge the staging mode.
 	if !higher.StageMode.IsDefault() {
 		result.StageMode = higher.StageMode
 	} else {
 		result.StageMode = lower.StageMode
 	}
 
-	// Merge symbolic link mode.
+	// Merge the symbolic link mode.
 	if !higher.SymbolicLinkMode.IsDefault() {
 		result.SymbolicLinkMode = higher.SymbolicLinkMode
 	} else {
 		result.SymbolicLinkMode = lower.SymbolicLinkMode
 	}
 
-	// Merge watching mode.
+	// Merge the watching mode.
 	if !higher.WatchMode.IsDefault() {
 		result.WatchMode = higher.WatchMode
 	} else {
 		result.WatchMode = lower.WatchMode
 	}
 
-	// Merge polling interval.
+	// Merge the polling interval.
 	if higher.WatchPollingInterval != 0 {
 		result.WatchPollingInterval = higher.WatchPollingInterval
 	} else {
 		result.WatchPollingInterval = lower.WatchPollingInterval
+	}
+
+	// Merge the ignore syntax.
+	if !higher.IgnoreSyntax.IsDefault() {
+		result.IgnoreSyntax = higher.IgnoreSyntax
+	} else {
+		result.IgnoreSyntax = lower.IgnoreSyntax
 	}
 
 	// Merge default ignores. In theory, at most one of these should be
@@ -275,46 +331,53 @@ func MergeConfigurations(lower, higher *Configuration) *Configuration {
 	result.Ignores = append(result.Ignores, lower.Ignores...)
 	result.Ignores = append(result.Ignores, higher.Ignores...)
 
-	// Merge VCS ignore mode.
+	// Merge the VCS ignore mode.
 	if !higher.IgnoreVCSMode.IsDefault() {
 		result.IgnoreVCSMode = higher.IgnoreVCSMode
 	} else {
 		result.IgnoreVCSMode = lower.IgnoreVCSMode
 	}
 
-	// Merge permissions mode.
+	// Merge the permissions mode.
 	if !higher.PermissionsMode.IsDefault() {
 		result.PermissionsMode = higher.PermissionsMode
 	} else {
 		result.PermissionsMode = lower.PermissionsMode
 	}
 
-	// Merge default file mode.
+	// Merge the default file mode.
 	if higher.DefaultFileMode != 0 {
 		result.DefaultFileMode = higher.DefaultFileMode
 	} else {
 		result.DefaultFileMode = lower.DefaultFileMode
 	}
 
-	// Merge default directory mode.
+	// Merge the default directory mode.
 	if higher.DefaultDirectoryMode != 0 {
 		result.DefaultDirectoryMode = higher.DefaultDirectoryMode
 	} else {
 		result.DefaultDirectoryMode = lower.DefaultDirectoryMode
 	}
 
-	// Merge default owner.
+	// Merge the default owner.
 	if higher.DefaultOwner != "" {
 		result.DefaultOwner = higher.DefaultOwner
 	} else {
 		result.DefaultOwner = lower.DefaultOwner
 	}
 
-	// Merge default group.
+	// Merge the default group.
 	if higher.DefaultGroup != "" {
 		result.DefaultGroup = higher.DefaultGroup
 	} else {
 		result.DefaultGroup = lower.DefaultGroup
+	}
+
+	// Merge the compression algorithm.
+	if !higher.CompressionAlgorithm.IsDefault() {
+		result.CompressionAlgorithm = higher.CompressionAlgorithm
+	} else {
+		result.CompressionAlgorithm = lower.CompressionAlgorithm
 	}
 
 	// Done.

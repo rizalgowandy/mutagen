@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,8 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+
+	"github.com/klauspost/compress/gzip"
 
 	"github.com/mutagen-io/mutagen/cmd"
 
@@ -47,8 +48,9 @@ const (
 	cliBaseName = "mutagen"
 
 	// minimumMacOSVersion is the minimum version of macOS that we'll support
-	// (currently pinned to the oldest version of macOS that Go supports).
-	minimumMacOSVersion = "10.13"
+	// (currently pinned to the oldest version of macOS that Mutagen's minimum
+	// Go version supports).
+	minimumMacOSVersion = "10.15"
 
 	// minimumARMSupport is the value to pass to the GOARM environment variable
 	// when building binaries. We currently specify support for ARMv5. This will
@@ -166,7 +168,7 @@ func (t Target) BuildBundleInReleaseSlimMode() bool {
 
 // Build executes a module-aware build of the specified package URL, storing the
 // output of the build at the specified path.
-func (t Target) Build(url, output string, disableDebug bool) error {
+func (t Target) Build(url, output string, enableSSPLEnhancements, disableDebug bool) error {
 	// Compute the build command. If we don't need debugging, then we use the -s
 	// and -w linker flags to omit the symbol table and debugging information.
 	// This shaves off about 25% of the binary size and only disables debugging
@@ -175,6 +177,19 @@ func (t Target) Build(url, output string, disableDebug bool) error {
 	// In this case, we also trim the code paths stored in the executable, as
 	// there's no use in having the full paths available.
 	arguments := []string{"build", "-o", output}
+	var tags []string
+	if url == cliPackage {
+		tags = append(tags, "mutagencli")
+	}
+	if url == agentPackage {
+		tags = append(tags, "mutagenagent")
+	}
+	if enableSSPLEnhancements {
+		tags = append(tags, "mutagensspl")
+	}
+	if len(tags) > 0 {
+		arguments = append(arguments, "-tags", strings.Join(tags, ","))
+	}
 	if disableDebug {
 		arguments = append(arguments, "-ldflags=-s -w", "-trimpath")
 	}
@@ -225,9 +240,8 @@ var targets = []Target{
 	{"freebsd", "386"},
 	{"freebsd", "amd64"},
 	{"freebsd", "arm"},
-	// TODO: The freebsd/arm64 port was added in Go 1.14, but for some reason
-	// isn't documented at https://golang.org/doc/install/source. Submit a pull
-	// request to add it to the Go documentation.
+	// The freebsd/arm64 port was added in Go 1.14, but for some reason isn't
+	// documented at https://golang.org/doc/install/source.
 	{"freebsd", "arm64"},
 
 	// Define illumos targets. We disable explicit support for illumos because
@@ -241,17 +255,17 @@ var targets = []Target{
 	// as Solaris, so our probing wouldn't be able to identify illumos anyway.
 	// {"illumos", "amd64"},
 
+	// Define iOS/iPadOS/watchOS/tvOS targets. We disable support for these
+	// since they don't make sense as target platforms.
+	// The ios/amd64 port was added in Go 1.16, but for some reason isn't
+	// documented at https://golang.org/doc/install/source.
+	// {"ios", "amd64"},
+	// {"ios", "arm64"},
+
 	// Define WebAssembly targets. We disable support for WebAssembly since it
 	// doesn't make sense as a target platform.
 	// {"js", "wasm"},
-
-	// Define iOS/iPadOS/watchOS/tvOS targets. We disable support for these
-	// since they don't make sense as target platforms.
-	// TODO: The ios/amd64 port was added in Go 1.16, but for some reason isn't
-	// documented at https://golang.org/doc/install/source. Submit a pull
-	// request to add it to the Go documentation.
-	// {"ios", "amd64"},
-	// {"ios", "arm64"},
+	// {"wasip1", "wasm"},
 
 	// Define Linux targets.
 	{"linux", "386"},
@@ -266,12 +280,12 @@ var targets = []Target{
 	// In this case, we'll also need to update platform detection with the
 	// appropriate uname -m value.
 	// {"linux", "loong64"},
-	{"linux", "ppc64"},
-	{"linux", "ppc64le"},
 	{"linux", "mips"},
 	{"linux", "mipsle"},
 	{"linux", "mips64"},
 	{"linux", "mips64le"},
+	{"linux", "ppc64"},
+	{"linux", "ppc64le"},
 	{"linux", "riscv64"},
 	{"linux", "s390x"},
 
@@ -279,9 +293,8 @@ var targets = []Target{
 	{"netbsd", "386"},
 	{"netbsd", "amd64"},
 	{"netbsd", "arm"},
-	// TODO: The netbsd/arm64 port was added in Go 1.16, but for some reason
-	// isn't documented at https://golang.org/doc/install/source. Submit a pull
-	// request to add it to the Go documentation.
+	// The netbsd/arm64 port was added in Go 1.16, but for some reason isn't
+	// documented at https://golang.org/doc/install/source.
 	{"netbsd", "arm64"},
 
 	// Define OpenBSD targets.
@@ -289,10 +302,22 @@ var targets = []Target{
 	{"openbsd", "amd64"},
 	{"openbsd", "arm"},
 	{"openbsd", "arm64"},
-	// TODO: The openbsd/mips64 port was added in Go 1.16, but for some reason
-	// isn't documented at https://golang.org/doc/install/source. Submit a pull
-	// request to add it to the Go documentation.
-	{"openbsd", "mips64"},
+	// The openbsd/mips64 port was added in Go 1.16, but for some reason isn't
+	// documented at https://golang.org/doc/install/source. It is currently
+	// disabled on https://build.golang.org/ due to https://go.dev/issue/36435.
+	// Moreover, it seems to be broken when using the Go sys subrepository after
+	// v0.1.0 - the Go linker crashes with a segfault (possibly due to the
+	// aforementioned issue). Until the picture around this port clarifies a
+	// bit, it's not worth supporting.
+	// {"openbsd", "mips64"},
+	// The openbsd/ppc64 port was added in Go 1.22, but for some reason isn't
+	// documented at https://golang.org/doc/install/source. Let's wait and see
+	// if there's sufficient demand for it. It is still considered experimental.
+	// {"openbsd", "ppc64"},
+	// The openbsd/riscv64 port was added in Go 1.23, but for some reason isn't
+	// documented at https://golang.org/doc/install/source. Let's wait and see
+	// if there's sufficient demand for it. It is still considered experimental.
+	// {"openbsd", "riscv64"},
 
 	// Define Plan 9 targets. We disable support for Plan 9 because it's missing
 	// too many system calls and other APIs necessary for Mutagen to build. It
@@ -309,9 +334,6 @@ var targets = []Target{
 	// Define Windows targets.
 	{"windows", "386"},
 	{"windows", "amd64"},
-	// TODO: The windows/arm port was added in Go 1.12, but for some reason
-	// isn't documented at https://golang.org/doc/install/source. Submit a pull
-	// request to add it to the Go documentation.
 	{"windows", "arm"},
 	{"windows", "arm64"},
 }
@@ -486,7 +508,7 @@ func copyFile(sourcePath, destinationPath string) error {
 	return nil
 }
 
-var usage = `usage: build [-h|--help] [-m|--mode=<mode>]
+var usage = `usage: build [-h|--help] [-m|--mode=<mode>] [--sspl]
        [--macos-codesign-identity=<identity>]
 
 The mode flag accepts four values: 'local', 'slim', 'release', and
@@ -496,6 +518,9 @@ agents for a common subset of platforms. 'release' will build CLI and agent
 binaries for all platforms and package for release. 'release-slim' is the same
 as release but only builds release bundles for a small subset of platforms. The
 default mode is 'slim'.
+
+If --sspl is specified, then SSPL-licensed enhancements will be included in the
+build output. By default, only MIT-licensed code is included in builds.
 
 If --macos-codesign-identity specifies a non-empty value, then it will be used
 to perform code signing on all macOS binaries in a fashion suitable for
@@ -510,8 +535,10 @@ func build() error {
 	flagSet := pflag.NewFlagSet("build", pflag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	var mode, macosCodesignIdentity string
+	var enableSSPLEnhancements bool
 	flagSet.StringVarP(&mode, "mode", "m", "slim", "specify the build mode")
 	flagSet.StringVar(&macosCodesignIdentity, "macos-codesign-identity", "", "specify the macOS code signing identity")
+	flagSet.BoolVar(&enableSSPLEnhancements, "sspl", false, "enable SSPL-licensed enhancements")
 	if err := flagSet.Parse(os.Args[1:]); err != nil {
 		if err == pflag.ErrHelp {
 			fmt.Fprint(os.Stdout, usage)
@@ -525,11 +552,10 @@ func build() error {
 	}
 
 	// The only platform really suited to cross-compiling for every other
-	// platform at the moment is macOS. This is because its DNS resolution
-	// really has to be done through the system's DNS resolver in order to
-	// function properly and because FSEvents is used for file monitoring and
-	// that is a C-based API, not accessible purely via system calls. All of the
-	// other platforms can survive with pure Go compilation.
+	// platform at the moment is macOS. This is because FSEvents is used for
+	// file monitoring and that is a C-based API, not accessible purely via
+	// system calls. All of the other platforms can operate with pure Go
+	// compilation.
 	if runtime.GOOS != "darwin" {
 		if mode == "release" {
 			return errors.New("macOS is required for release builds")
@@ -620,7 +646,7 @@ func build() error {
 	for _, target := range agentTargets {
 		log.Println("Building agent for", target)
 		agentBuildPath := filepath.Join(agentBuildSubdirectoryPath, target.Name())
-		if err := target.Build(agentPackage, agentBuildPath, disableDebug); err != nil {
+		if err := target.Build(agentPackage, agentBuildPath, enableSSPLEnhancements, disableDebug); err != nil {
 			return fmt.Errorf("unable to build agent: %w", err)
 		}
 		if macosCodesignIdentity != "" && target.GOOS == "darwin" {
@@ -633,9 +659,9 @@ func build() error {
 	// Build CLI binaries.
 	log.Println("Building CLI binaries...")
 	for _, target := range cliTargets {
-		log.Println("Build CLI for", target)
+		log.Println("Building CLI for", target)
 		cliBuildPath := filepath.Join(cliBuildSubdirectoryPath, target.Name())
-		if err := target.Build(cliPackage, cliBuildPath, disableDebug); err != nil {
+		if err := target.Build(cliPackage, cliBuildPath, enableSSPLEnhancements, disableDebug); err != nil {
 			return fmt.Errorf("unable to build CLI: %w", err)
 		}
 		if macosCodesignIdentity != "" && target.GOOS == "darwin" {

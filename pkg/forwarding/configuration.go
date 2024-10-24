@@ -15,8 +15,7 @@ func (c *Configuration) EnsureValid(endpointSpecific bool) error {
 		return errors.New("nil configuration")
 	}
 
-	// Verify that the socket overwrite mode is unspecified or supported for
-	// usage.
+	// Verify that the socket overwrite mode is unspecified or supported.
 	if !(c.SocketOverwriteMode.IsDefault() || c.SocketOverwriteMode.Supported()) {
 		return errors.New("unknown or unsupported socket overwrite mode")
 	}
@@ -63,28 +62,28 @@ func MergeConfigurations(lower, higher *Configuration) *Configuration {
 	// Create the resulting configuration.
 	result := &Configuration{}
 
-	// Merge socket overwrite mode.
+	// Merge the socket overwrite mode.
 	if !higher.SocketOverwriteMode.IsDefault() {
 		result.SocketOverwriteMode = higher.SocketOverwriteMode
 	} else {
 		result.SocketOverwriteMode = lower.SocketOverwriteMode
 	}
 
-	// Merge socket owner.
+	// Merge the socket owner.
 	if higher.SocketOwner != "" {
 		result.SocketOwner = higher.SocketOwner
 	} else {
 		result.SocketOwner = lower.SocketOwner
 	}
 
-	// Merge socket group.
+	// Merge the socket group.
 	if higher.SocketGroup != "" {
 		result.SocketGroup = higher.SocketGroup
 	} else {
 		result.SocketGroup = lower.SocketGroup
 	}
 
-	// Merge socket permission mode.
+	// Merge the socket permission mode.
 	if higher.SocketPermissionMode != 0 {
 		result.SocketPermissionMode = higher.SocketPermissionMode
 	} else {
